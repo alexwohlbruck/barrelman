@@ -933,6 +933,9 @@ describe('searchPlaces — corrected spellings', () => {
     (q?.queryChunks ?? []).flatMap((c: any) =>
       c?.queryChunks ? paramsOf(c) : typeof c === 'object' && c !== null ? [] : [c])
   const mentions = (q: any, word: string) => paramsOf(q).some((v) => typeof v === 'string' && v.includes(word))
+  const textOf = (q: any): string =>
+    (q?.queryChunks ?? []).map((c: any) => (c?.queryChunks ? textOf(c) : Array.isArray(c?.value) ? c.value.join('') : '')).join('')
+  const isNamed = (q: any) => textOf(q).includes('lower(unaccent(name)) IN')
 
   const store = { id: 'node/14003842716', name: "Men's Wearhouse", text_rank: 1, distance_m: 300 }
   const fixes = new Map([['warehouse', ['wearhouse']]])
@@ -961,8 +964,6 @@ describe('searchPlaces — corrected spellings', () => {
   test('a submitted search answered by a correction does not wait out trigram', async () => {
     // Trigram used to hold the response for its whole budget after the
     // corrected pass had already found the place.
-    const textOf = (q: any): string =>
-      (q?.queryChunks ?? []).map((c: any) => (c?.queryChunks ? textOf(c) : Array.isArray(c?.value) ? c.value.join('') : '')).join('')
     mockCorrections.mockImplementation(async () => fixes)
     mockExecute.mockImplementation(async (q: any) => {
       if (textOf(q).includes('AND name %')) return new Promise((r) => setTimeout(() => r([]), 2000))
@@ -972,6 +973,39 @@ describe('searchPlaces — corrected spellings', () => {
     const results = await searchPlaces({ query: "men's warehouse flatbush", lat: 40.684, lng: -73.976 })
     expect(results.map((r: any) => r.id)).toContain('node/14003842716')
     expect(performance.now() - started).toBeLessThan(1000)
+  })
+
+  describe('a place named the word a correction changed', () => {
+    // Dimes (49 Canal St) is in OSM; no place has both "dimes" and "square".
+    const dimes = { id: 'node/5215515121', name: 'Dimes', text_rank: 1, distance_m: 120 }
+    const timesSquare = { id: 'node/7613305940', name: 'Times Square', text_rank: 0.75, distance_m: 4500 }
+    const typo = new Map([['dimes', ['times']]])
+    const respond = (named: any[], corrected: any[]) => async (q: any) =>
+      isNamed(q) ? named : mentions(q, 'times') ? corrected : []
+
+    test('outranks the corrected spelling in a submitted search', async () => {
+      mockCorrections.mockImplementation(async () => typo)
+      mockExecute.mockImplementation(respond([dimes], [timesSquare]))
+      const results = await searchPlaces({ query: 'dimes square', lat: 40.7146, lng: -73.9916 })
+      expect(results.map((r: any) => r.id)).toEqual(['node/5215515121', 'node/7613305940'])
+    })
+
+    test('outranks the corrected spelling in typeahead', async () => {
+      mockCorrections.mockImplementation(async () => typo)
+      mockExecute.mockImplementation(respond([dimes], [timesSquare]))
+      const results = await searchPlaces({ query: 'dimes square', lat: 40.7146, lng: -73.9916, autocomplete: true })
+      expect(results[0].id).toBe('node/5215515121')
+    })
+
+    test('is left out when the corrections kept that word as typed', async () => {
+      // "prospect" matched as typed in Prospect Park; only "prak" was changed.
+      const town = { id: 'node/1', name: 'Prospect', text_rank: 1, distance_m: 100 }
+      const park = { id: 'way/2', name: 'Prospect Park', text_rank: 0.9, distance_m: 200 }
+      mockCorrections.mockImplementation(async () => new Map([['prospect', ['prospects']], ['prak', ['park']]]))
+      mockExecute.mockImplementation(async (q: any) => (isNamed(q) ? [town] : mentions(q, 'park') ? [park] : []))
+      const results = await searchPlaces({ query: 'prospect prak', lat: 40.66, lng: -73.97 })
+      expect(results.map((r: any) => r.id)).toEqual(['way/2'])
+    })
   })
 
   test('a submitted search that filled its limit looks for no corrections', async () => {
