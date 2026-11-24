@@ -32,6 +32,27 @@ describe('layWays', () => {
     expect(isCycleway({ highway: 'footway', bicycle: 'yes' })).toBe(false)
   })
 
+  test('a cycleway is laid green on its own footbridge only where a model stands in for the footbridge', () => {
+    const footbridge = { ...testSurface(points, [100, 106, 100], undefined, 4), kind: 'path' as const }
+    const drawn = deckMeshOut()
+    layWays(drawn, [{ kind: 'path', points: line(0, 100), cycle: true }], [footbridge], colors, points[0])
+    expect(drawn.position.length).toBe(0)
+    const modelled = deckMeshOut()
+    layWays(modelled, [{ kind: 'path', points: line(0, 100), cycle: true }], [{ ...footbridge, modelled: [false, true, true] }], colors, points[0])
+    expect(modelled.position.length).toBeGreaterThan(0)
+    expect(modelled.color.slice(0, 3)).toEqual(colors.green)
+    const xs = modelled.position.filter((_, k) => k % 3 === 0).map(x => x / M)
+    expect(Math.min(...xs)).toBeGreaterThan(45)
+    // Over the model's own bikeway, which runs within a few tenths of the deck.
+    for (let k = 0; k < modelled.position.length; k += 3) {
+      const x = modelled.position[k] / M
+      expect(modelled.position[k + 2] * metresPerUnit(y0) - (106 - ((x - 50) * 6) / 50)).toBeCloseTo(0.3, 1)
+    }
+    const footway = deckMeshOut()
+    layWays(footway, [{ kind: 'path', points: line(0, 100) }], [{ ...footbridge, modelled: [true, true, true] }], colors, points[0])
+    expect(footway.position.length).toBe(0)
+  })
+
   test('a strip lies on a deck that slopes across under it, not half sunk into it', () => {
     const tilted = testSurface(points, [100, 106, 100], undefined, 7)
     // 0.2 m higher per metre toward +y.
