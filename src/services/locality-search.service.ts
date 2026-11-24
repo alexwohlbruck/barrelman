@@ -21,7 +21,7 @@
 import { db } from '../db'
 import { buildPartialIndexes } from '../lib/partial-indexes'
 import { sql } from 'drizzle-orm'
-import { buildTsQueryText } from '../lib/search-query'
+import { buildTsQueryText, foldName } from '../lib/search-query'
 
 /**
  * Rows the locality layer searches. Must match the WHERE of
@@ -207,8 +207,7 @@ export async function searchLocalities({
   ])
   // A place named exactly what was typed settles how to read it: "north
   // carolina" is the state, not a town called North in some Carolina.
-  const fold = (t: string) => t.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-  const exact = words.some((r: any) => r.name && fold(r.name) === fold(query))
+  const exact = words.some((r: any) => r.name && foldName(r.name) === foldName(query))
   const rows = mergePasses(exact ? [words] : [words, ...qualified], limit)
   if (rows.length > 0 || !fuzzyReady || query.length < FUZZY_MIN_QUERY || isPostalShaped(query)) return rows
   // A place by that name that only scored too low ("hickory" from New York)

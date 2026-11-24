@@ -33,7 +33,7 @@
 import { sql } from 'drizzle-orm'
 import { LRUCache } from 'lru-cache'
 import { executeWithin } from '../lib/bounded-query'
-import { cleanWords } from '../lib/search-query'
+import { cleanWords, foldName } from '../lib/search-query'
 
 /** Statement timeout per word. A lookup measures under a millisecond. */
 const LOOKUP_TIMEOUT_MS = 150
@@ -143,9 +143,6 @@ interface Lookup {
 /** The lexicon only changes with an import, so a word's corrections hold. */
 const corrections = new LRUCache<string, Lookup>({ max: 20_000, ttl: 60 * 60 * 1000 })
 
-/** Lexicon words are unaccented and lowercased, like the tsvector. */
-const fold = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '')
-
 async function lookup(word: string): Promise<Lookup | null> {
   // One aggregated row whatever matched, so no rows at all means the lookup
   // failed or ran out of time, and is not cached as "no corrections".
@@ -175,7 +172,7 @@ async function lookupAll(words: string[]): Promise<Map<string, Lookup>> {
   await Promise.all(eligible.map(async (w) => {
     let found = corrections.get(w)
     if (!found) {
-      const looked = await lookup(fold(w))
+      const looked = await lookup(foldName(w))
       if (!looked) return
       corrections.set(w, looked)
       found = looked
@@ -207,7 +204,7 @@ export async function hasMisspelling(words: string[], prefixLast: boolean): Prom
   const cleaned = cleanWords(words)
   const last = cleaned[cleaned.length - 1]
   for (const [w, found] of await lookupAll(cleaned)) {
-    if (looksMisspelt(fold(w), found.own, found.candidates, prefixLast && w === last)) return true
+    if (looksMisspelt(foldName(w), found.own, found.candidates, prefixLast && w === last)) return true
   }
   return false
 }
