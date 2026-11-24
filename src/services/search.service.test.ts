@@ -990,6 +990,14 @@ describe('searchPlaces — corrected spellings', () => {
       expect(results.map((r: any) => r.id)).toEqual(['node/5215515121', 'node/7613305940'])
     })
 
+    test('is found when another word of the query is too common to search', async () => {
+      setLexemeStats({ square: 0.02 }, 219_000_000)
+      mockCorrections.mockImplementation(async () => new Map([['dimes', ['times']], ['square', ['squares']]]))
+      mockExecute.mockImplementation(respond([dimes], [timesSquare]))
+      const results = await searchPlaces({ query: 'dimes square', lat: 40.7146, lng: -73.9916 })
+      expect(results[0].id).toBe('node/5215515121')
+    })
+
     test('outranks the corrected spelling in typeahead', async () => {
       mockCorrections.mockImplementation(async () => typo)
       mockExecute.mockImplementation(respond([dimes], [timesSquare]))

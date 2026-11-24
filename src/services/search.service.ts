@@ -823,10 +823,12 @@ export async function searchPlaces(
       return [...named.filter((r: any) => changed.has(foldName(r.name ?? ''))), ...rows]
     }
 
-    // Places whose whole name is one of `words`, as typed.
-    const namedFts = (local: boolean, words: string[]): Promise<any[]> => {
+    // Places whose whole name is one of `words`, as typed. Each word is gated
+    // alone: OR-ed with "square", "dimes" would be skipped as too common.
+    const namedFts = (local: boolean, allWords: string[]): Promise<any[]> => {
+      const words = allWords.filter((w) => indexCanNarrow(w))
+      if (words.length === 0) return Promise.resolve([])
       const text = words.join(' | ')
-      if (!indexCanNarrow(text)) return Promise.resolve([])
       const expr = sql`to_tsquery('simple', unaccent(${text}))`
       const rank = sql`(1.5 * ${NAMED_RANK} * ${categoryDemotion})`
       const filter = sql`AND lower(unaccent(name)) IN (${sql.join(words.map((w) => sql`${foldName(w)}`), sql`, `)})`
