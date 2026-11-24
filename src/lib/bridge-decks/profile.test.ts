@@ -279,6 +279,19 @@ describe('a deck pinned by its nodes\' ele', () => {
     expect(z[i]).toBeCloseTo(75 + ((30 - 75) * (d[i] - 1435)) / (CORONADO.length - 1435), 3)
   })
 
+  it('follows pins under a clearance they show is overstated, as a walkway pinned beside a roadway', () => {
+    // Held 6.5 m over a roadway the whole way out; the pins put it 3 m over.
+    const pins = [300, 600, 900, 1200].map(at => ({ at, height: 20 + at / 100 }))
+    const z = solve(deck, bay, [...water, ...d.filter(s => s > 100 && s < 1300).map(s => ({ at: s, height: 23.5 + s / 100 }))], [null, null], pins)
+    const off = d.flatMap((s, i) => (s >= 300 && s <= 1200 ? [[Math.round(s), Math.round((z[i] - (20 + s / 100)) * 100) / 100]] : [])).filter(([, e]) => Math.abs(e) >= 0.3)
+    expect(off).toEqual([])
+  })
+
+  it('still clears a road it crosses between two pins', () => {
+    const z = solve(deck, bay, [...water, { at: 750, height: 32 }], [null, null], [{ at: 600, height: 26 }, { at: 900, height: 29 }])
+    expect(z[d.findIndex(s => s >= 750)]).toBeGreaterThanOrEqual(32 - 1e-9)
+  })
+
   it('is never cut to what MAX_GRADE reaches from its ends', () => {
     // 30 m up within 200 m of the end: steeper than a deck climbs by rule.
     const z = solve(deck, bay, water, [null, null], [{ at: 200, height: 46 }])
