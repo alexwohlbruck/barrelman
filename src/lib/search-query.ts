@@ -133,6 +133,27 @@ export function buildTsQueryText(
   return parts.join(' & ')
 }
 
+/** A name as the tsvector holds it: unaccented and lowercased. */
+export function foldName(name: string): string {
+  return name.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+}
+
+/**
+ * The corrected words `name` needed changed: it holds one of the word's
+ * corrections, but not the word itself.
+ */
+export function correctedAwayWords(
+  corrections: ReadonlyMap<string, readonly string[]>, name: string,
+): Set<string> {
+  const out = new Set<string>()
+  const words = new Set(cleanWords(foldName(name).split(/\s+/)))
+  for (const [word, fixes] of corrections) {
+    const folded = foldName(word)
+    if (!words.has(folded) && fixes.some((f) => words.has(foldName(f)))) out.add(folded)
+  }
+  return out
+}
+
 /** Query words as buildTsQueryText sees them: lowercased letters and digits. */
 export function cleanWords(words: string[]): string[] {
   return words

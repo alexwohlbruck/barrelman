@@ -18,6 +18,7 @@
 
 import { db } from '../db'
 import { sql } from 'drizzle-orm'
+import { foldName } from '../lib/search-query'
 
 interface LexemeStats {
   /** Lexeme → fraction of rows containing it (the ~1000 most common). */
@@ -57,9 +58,6 @@ function current(): LexemeStats | null {
   return stats
 }
 
-/** Lexemes in ts are unaccented and lowercased (see build_ts). */
-const fold = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-
 export interface MatchEstimate {
   /** Rows the query matches, at most: as many as its rarest word. */
   rows: number
@@ -90,7 +88,7 @@ export function estimateMatches(tsQueryText: string): MatchEstimate | null {
     let prefixFreq = 0
     for (const raw of group.replace(/[()]/g, '').split(' | ')) {
       const prefix = raw.endsWith(':*')
-      const term = fold(prefix ? raw.slice(0, -2) : raw).trim()
+      const term = foldName(prefix ? raw.slice(0, -2) : raw).trim()
       if (!term) continue
       let f = 0
       // A phrase ("new <-> york") matches no more rows than its rarest word,

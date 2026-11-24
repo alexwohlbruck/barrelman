@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+* A place named exactly what you typed now ranks above a spelling correction of that word. "dimes square" finds the restaurant Dimes on Canal St instead of only Times Square.
+
 ## [0.10.66] - 2026-11-24
 
 ### Fixed

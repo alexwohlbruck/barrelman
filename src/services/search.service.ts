@@ -9,7 +9,7 @@ import { estimateMatches } from './lexeme-stats.service'
 import { LARGE_AREA_CELL, LARGE_AREA_PREDICATE, cellRanges, largeAreaIndexReady } from './large-area-search.service'
 import { executeWithin } from '../lib/bounded-query'
 import { reconcileTransitHits } from '../lib/transit-search'
-import { buildTsQueryText, isStreetQuery } from '../lib/search-query'
+import { buildTsQueryText, cleanWords, correctedAwayWords, foldName, isStreetQuery } from '../lib/search-query'
 import { correctionsFor, hasMisspelling } from './search-lexicon.service'
 import { envNumber } from '../config/env'
 
@@ -158,6 +158,10 @@ const CORRECTED_FTS_TIMEOUT_MS = 800
 
 /** A match that needed a corrected spelling ranks below one that didn't. */
 const CORRECTED_RANK = 0.8
+
+/** A place named exactly a word the corrected pass changed outranks the
+ *  corrections: 1.5 × this, against at most 1.5 × CORRECTED_RANK. */
+const NAMED_RANK = 0.9
 
 /** Pelias budget for typeahead that doesn't look like an address. Healthy
  *  answers measured 15ms at the median and 67ms at p90. */
@@ -479,7 +483,9 @@ export async function searchPlaces(
     // ordering, over-fetched pool. `local: false` is the original global shape.
     // Note the ORDER BY is the only thing that changes about ranking — text_rank
     // is still projected identically, and the JS re-rank below scores on it.
-    const ftsSql = (local: boolean, boxFilter = autocompleteBoxFilter, tsExpr = tsQueryExpr, rankExpr = ftsRankExpr) => sql`
+    const ftsSql = (
+      local: boolean, boxFilter = autocompleteBoxFilter, tsExpr = tsQueryExpr, rankExpr = ftsRankExpr, nameFilter = sql``,
+    ) => sql`
       SELECT
         id, osm_type, osm_id, name, name_abbrev, categories, tags,
         address, hours, phones, websites, geom_type,
@@ -491,6 +497,7 @@ export async function searchPlaces(
       ${local ? boxFilter : textSearchSpatialFilter}
       ${categoryFilter}
       ${tagsFilter}
+      ${nameFilter}
       ${local ? sql`ORDER BY centroid <-> ${locationPoint}` : proximityDecay(rankExpr)}
       LIMIT ${local ? AUTOCOMPLETE_POOL : limit}
     `
@@ -801,9 +808,33 @@ export async function searchPlaces(
       // city extract, but on the 218M-row national table it ran into its
       // timeout: a correction is usually a common word ("starbucks"), which
       // is exactly what the probe of the nearest rows exists for.
-      if (local) return localFts(text, expr, rank)
-      if (!indexCanNarrow(text)) return []
-      return executeWithin(ftsSql(false, undefined, expr, rank), CORRECTED_FTS_TIMEOUT_MS)
+      const corrected = local ? localFts(text, expr, rank)
+        : indexCanNarrow(text) ? executeWithin(ftsSql(false, undefined, expr, rank), CORRECTED_FTS_TIMEOUT_MS)
+        : Promise.resolve([] as any[])
+      const [named, rows] = await Promise.all([namedFts(local, [...fixes.keys()]), corrected])
+      // "dimes square" corrected to Times Square; the restaurant Dimes proves
+      // "dimes" was meant. A word the corrections kept as typed proves nothing.
+      const changedByRow = rows.map((r: any) => correctedAwayWords(fixes, r.name ?? ''))
+      // A named place holds one typed word. A correction that kept more of
+      // them as typed is the better match: Men's Wearhouse, not "Warehouse".
+      const typedWords = cleanWords(correctedWords).length
+      if (changedByRow.some((c) => c.size > 0 && typedWords - c.size > 1)) return rows
+      const changed = new Set(changedByRow.flatMap((c) => [...c]))
+      return [...named.filter((r: any) => changed.has(foldName(r.name ?? ''))), ...rows]
+    }
+
+    // Places whose whole name is one of `words`, as typed. Each word is gated
+    // alone: OR-ed with "square", "dimes" would be skipped as too common.
+    const namedFts = (local: boolean, allWords: string[]): Promise<any[]> => {
+      const words = allWords.filter((w) => indexCanNarrow(w))
+      if (words.length === 0) return Promise.resolve([])
+      const text = words.join(' | ')
+      const expr = sql`to_tsquery('simple', unaccent(${text}))`
+      const rank = sql`(1.5 * ${NAMED_RANK} * ${categoryDemotion})`
+      const filter = sql`AND lower(unaccent(name)) IN (${sql.join(words.map((w) => sql`${foldName(w)}`), sql`, `)})`
+      return local
+        ? executeWithin(ftsSql(true, autocompleteBoxFilter, expr, rank, filter), LOCAL_INDEX_TIMEOUT_MS)
+        : executeWithin(ftsSql(false, undefined, expr, rank, filter), CORRECTED_FTS_TIMEOUT_MS)
     }
 
     // Autocomplete retry: the local pass only sees the viewport, so a place the
@@ -920,9 +951,8 @@ export async function searchPlaces(
     // from alt_name and short_name too, so "mitte" pinned a pub over the
     // Mitte district. A partial name still yields to an exact code — "bur" is
     // Burbank's airport, not Bury.
-    const fold = (t: string) => t.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-    const typed = fold(sanitizedQuery)
-    const exactLocalities = (localityRows as any[]).filter((r: any) => r.name && fold(r.name) === typed)
+    const typed = foldName(sanitizedQuery)
+    const exactLocalities = (localityRows as any[]).filter((r: any) => r.name && foldName(r.name) === typed)
     // See STRONG_ROUTE_RANK: a route named for the place typed is not the
     // place, and goes after the places that are.
     const strongRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) >= STRONG_ROUTE_RANK)

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { buildTsQueryText, inflections, isStreetQuery } from './search-query'
+import { buildTsQueryText, correctedAwayWords, foldName, inflections, isStreetQuery } from './search-query'
 
 describe('inflections', () => {
   test('English plurals both ways', () => {
@@ -107,5 +107,27 @@ describe('isStreetQuery', () => {
     expect(isStreetQuery(['street'])).toBe(false)
     expect(isStreetQuery(['jackson', 'heights'])).toBe(false)
     expect(isStreetQuery(['blue', 'star'])).toBe(false)
+  })
+})
+
+describe('foldName', () => {
+  test('drops accents and case', () => {
+    expect(foldName('Café Ñandú')).toBe('cafe nandu')
+  })
+})
+
+describe('correctedAwayWords', () => {
+  const fixes = new Map([['dimes', ['times']], ['square', ['squares']]])
+
+  test('a word a name holds only as its correction', () => {
+    expect(correctedAwayWords(fixes, 'Times Square')).toEqual(new Set(['dimes']))
+  })
+
+  test('not a word the name holds as typed', () => {
+    expect(correctedAwayWords(fixes, 'Dimes Square')).toEqual(new Set())
+  })
+
+  test('matches through accents, case and punctuation', () => {
+    expect(correctedAwayWords(new Map([['cafe', ['cafes']]]), "CAFÉS d'Été")).toEqual(new Set(['cafe']))
   })
 })
