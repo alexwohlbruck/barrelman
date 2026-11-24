@@ -1,4 +1,9 @@
 {
   "$comment": "Deck heights for bridges whose OSM outline records none to trust (see src/lib/bridge-decks/elevation.ts). Keyed by the bridge's Wikidata item, which survives its ways being split, joined or redrawn. deck: metres from the water or ground under the main span to the top of the roadway at its crest. Prefer fixing OSM: add ele (metres above sea level) to a few nodes of the bridge's road ways, or seamark:bridge:clearance_height or a deck height to the man_made=bridge outline, then remove the entry here.",
-  "bridges": {}
+  "bridges": {
+    "Q1293993": {
+      "deck": 269.6,
+      "note": "Mike O'Callaghan–Pat Tillman Memorial Bridge, Black Canyon (US 93 / I 11). USGS 3DEP lidar AZ_LowerColoradoRiver_B1_2018: roadway crest 466.14 m NAVD88 over the arch crown, the Colorado River under it 196.5 m. OSM ele on the deck's nodes can't carry it: they stand about 270 m over the river, past MAX_DECK."
+    }
+  }
 }
