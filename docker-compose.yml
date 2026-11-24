@@ -51,6 +51,9 @@ services:
     container_name: barrelman-db
     image: alexwohlbruck/barrelman-db:latest
     restart: unless-stopped
+    # Serving processes go last when the host runs out of memory; ops batch
+    # jobs (portolan builds, imports) are restartable and go first.
+    oom_score_adj: -600
     logging: *default-logging
     # The stock postgres image ships shared_buffers=128MB — for a 23GB table
     # that means almost every search projection is a cold read, and it was the
@@ -255,6 +258,7 @@ services:
     # (scripts/rebuild-motis.sh), so it should happen when an operator chooses.
     image: ghcr.io/motis-project/motis:2.11.4@sha256:594eff881d4319549387563a28dffb2ac48650df5422325a44a6c2f69f79e9b9
     restart: unless-stopped
+    oom_score_adj: -600
     # MOTIS logs a timer pair per realtime poll — `[scoped_timer] [rt update]`
     # and friends — at a few lines a second, forever. Docker's json-file driver
     # is unbounded by default, so that had grown to 18 GB on one dev box and
@@ -301,6 +305,7 @@ services:
     container_name: barrelman
     image: alexwohlbruck/barrelman:latest
     restart: unless-stopped
+    oom_score_adj: -600
     logging: *default-logging
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
@@ -540,6 +545,7 @@ services:
       context: .
       dockerfile: Dockerfile.ops
     restart: unless-stopped
+    oom_score_adj: 500
     logging: *default-logging
     environment:
       DATABASE_URL: postgresql://barrelman:${BARRELMAN_DB_PASSWORD:-barrelman}@barrelman-db:5432/barrelman
