@@ -314,6 +314,10 @@ const hdWays: [number, string, Record<string, string>][] = [
   [310, line([-74.345, 40.712], [-74.345, 40.714]), { highway: 'residential', lanes: '2', 'cycleway:left': 'lane', 'cycleway:left:marking:left': 'barred_area' }],
   [311, line([-74.347, 40.712], [-74.347, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', 'cycleway:left': 'opposite_lane', 'cycleway:left:marking:left': 'barred_area' }],
   [312, line([-74.349, 40.712], [-74.349, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', 'cycleway:left': 'lane', 'cycleway:left:marking:left': 'barred_area' }],
+  // A two-way buffered bike lane on the left of a one-way street, and a contraflow lane on the right of a two-way one.
+  [950, line([-74.540, 40.712], [-74.540, 40.714]), { highway: 'residential', oneway: 'yes', lanes: '1', 'cycleway:left': 'lane',
+    'cycleway:left:buffer': 'yes', 'cycleway:left:oneway': 'no', 'oneway:bicycle': 'no' }],
+  [951, line([-74.545, 40.712], [-74.545, 40.714]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane', 'cycleway:right:oneway': '-1' }],
   // A long way with a buffered bike lane and angled parking across the cell
   // boundary at 40.718, crossed far south of it.
   [300, line([-74.0175, 40.705], [-74.0175, 40.728]), { highway: 'residential', lanes: '2', 'cycleway:right': 'lane',
@@ -1610,6 +1614,23 @@ run('generate-road-markings.sql', () => {
 
     test('puts no walkers on a street, whatever its foot tag', async () => {
       expect((await glyphs(-74.377)).filter(r => r.glyph === 'road-walk')).toHaveLength(0)
+    })
+
+    test('puts a bike symbol each way on a two-way lane, each in the half its riders keep to', async () => {
+      const rows = (await glyphs(-74.540)).filter(r => r.glyph === 'road-bike')
+      const north = rows.filter(r => r.direction === 0)
+      const south = rows.filter(r => r.direction === 180)
+      expect(north.length).toBeGreaterThan(0)
+      expect(south.length).toBe(north.length)
+      // The lane is on the street's west side; northbound riders keep to its east half.
+      expect(Math.min(...north.map(r => r.off))).toBeGreaterThan(Math.max(...south.map(r => r.off)))
+      expect(rows.every(r => r.off < 0)).toBe(true)
+    })
+
+    test('turns a lane tagged to run against its way', async () => {
+      const rows = (await glyphs(-74.545)).filter(r => r.glyph === 'road-bike')
+      expect(rows.length).toBeGreaterThan(0)
+      expect(rows.every(r => r.direction === 180 && r.off > 0)).toBe(true)
     })
 
     test('puts one bike symbol down the middle of a two-way bikeway one lane wide', async () => {

@@ -2489,7 +2489,9 @@ WHERE r.marked AND road_twltl(r.tags, r.oneway, r.both_ways) AND m.len >= 40 AND
 
 -- Bike symbols along bike lanes and bikeways, and sharrows along shared lanes,
 -- every 60 m; walkers down the pedestrians' side of a segregated car-free way.
--- On a one-way street they read with the traffic.
+-- On a one-way street they read with the traffic. A lane's own
+-- cycleway:<side>:oneway turns it: one tagged no takes a symbol each way, each
+-- down the half its riders keep to.
 INSERT INTO road_glyphs_next (glyph, direction, bridge, geom)
 SELECT CASE WHEN side.walk THEN 'road-walk' WHEN side.lane THEN 'road-bike' ELSE 'road-sharrow' END,
        ((round(degrees(atan2(ST_X(b) - ST_X(a), ST_Y(b) - ST_Y(a))))::int + CASE WHEN side.forward THEN 0 ELSE 180 END) % 360 + 360) % 360,
@@ -2501,17 +2503,27 @@ FROM (
               'shared_lane' IN (COALESCE(tags->>CASE WHEN flip THEN 'cycleway:right' ELSE 'cycleway:left' END, tags->>'cycleway:both',
                                          CASE WHEN NOT oneway THEN tags->>'cycleway' END, '')) as sharrow_l,
               class = 'cycleway' OR (class IN ('path', 'footway') AND tags->>'bicycle' = 'designated') as bikeway,
-              class IN ('pedestrian', 'footway') OR (road_car_free(class) AND tags->>'foot' = 'designated') as walkway
+              class IN ('pedestrian', 'footway') OR (road_car_free(class) AND tags->>'foot' = 'designated') as walkway,
+              COALESCE(tags->>CASE WHEN flip THEN 'cycleway:left:oneway' ELSE 'cycleway:right:oneway' END, tags->>'cycleway:both:oneway') as ow_r,
+              COALESCE(tags->>CASE WHEN flip THEN 'cycleway:right:oneway' ELSE 'cycleway:left:oneway' END, tags->>'cycleway:both:oneway') as ow_l
   FROM _rm_roads r
 ) r
+-- Which way each lane's riders go along the line: OSM's yes and -1 are along and against the way, which a flipped way runs against.
+CROSS JOIN LATERAL (SELECT CASE r.ow_r WHEN 'no' THEN true WHEN 'yes' THEN NOT r.flip WHEN '-1' THEN r.flip ELSE true END as fwd_r,
+                           CASE r.ow_l WHEN 'no' THEN true WHEN 'yes' THEN NOT r.flip WHEN '-1' THEN r.flip ELSE r.oneway END as fwd_l,
+                           r.bike_r > 0 AND r.ow_r = 'no' as two_r, r.bike_l > 0 AND r.ow_l = 'no' as two_l) lane
 CROSS JOIN LATERAL (VALUES
   -- A two-way bikeway one lane wide takes one symbol, down its middle.
-  (true, r.bike_r > 0 OR r.bikeway, CASE WHEN r.bike_r > 0 THEN (r.br_a + r.br_b) / 2
+  (lane.fwd_r, r.bike_r > 0 OR r.bikeway, CASE WHEN lane.two_r THEN least(r.br_a, r.br_b) + abs(r.br_b - r.br_a) / 4
+                                         WHEN r.bike_r > 0 THEN (r.br_a + r.br_b) / 2
                                          WHEN r.bikeway AND NOT r.oneway AND r.bwd = 0 THEN (r.left_edge + r.right_edge) / 2
                                          ELSE r.right_edge + r.lane_w * 0.4 END,
    r.bike_r > 0 OR r.sharrow_r OR r.bikeway, false),
-  (r.oneway, r.bike_l > 0 OR r.bikeway, CASE WHEN r.bike_l > 0 THEN (r.bl_a + r.bl_b) / 2 ELSE r.left_edge - r.lane_w * 0.4 END,
+  (false, true, greatest(r.br_a, r.br_b) - abs(r.br_b - r.br_a) / 4, lane.two_r, false),
+  (lane.fwd_l, r.bike_l > 0 OR r.bikeway, CASE WHEN lane.two_l THEN least(r.bl_a, r.bl_b) + abs(r.bl_b - r.bl_a) / 4
+                                               WHEN r.bike_l > 0 THEN (r.bl_a + r.bl_b) / 2 ELSE r.left_edge - r.lane_w * 0.4 END,
    r.bike_l > 0 OR r.sharrow_l OR (r.bikeway AND NOT r.oneway AND r.bwd > 0), false),
+  (false, true, greatest(r.bl_a, r.bl_b) - abs(r.bl_b - r.bl_a) / 4, lane.two_l, false),
   (true, false, (r.left_edge + r.right_edge) / 2, r.walkway AND r.bike_r + r.bike_l > 0, true)
 ) side(forward, lane, off, present, walk)
 CROSS JOIN LATERAL generate_series(1, floor(ST_Length(r.g) / r.s / 60)::int) k
