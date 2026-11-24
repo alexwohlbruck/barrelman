@@ -139,17 +139,17 @@ export function foldName(name: string): string {
 }
 
 /**
- * The corrected words that `names` needed changed: a name holds one of the
- * word's corrections, but not the word itself.
+ * The corrected words `name` needed changed: it holds one of the word's
+ * corrections, but not the word itself.
  */
 export function correctedAwayWords(
-  corrections: ReadonlyMap<string, readonly string[]>, names: string[],
+  corrections: ReadonlyMap<string, readonly string[]>, name: string,
 ): Set<string> {
   const out = new Set<string>()
-  const nameWords = names.map((n) => new Set(cleanWords(foldName(n).split(/\s+/))))
+  const words = new Set(cleanWords(foldName(name).split(/\s+/)))
   for (const [word, fixes] of corrections) {
     const folded = foldName(word)
-    if (nameWords.some((ws) => !ws.has(folded) && fixes.some((f) => ws.has(foldName(f))))) out.add(folded)
+    if (!words.has(folded) && fixes.some((f) => words.has(foldName(f)))) out.add(folded)
   }
   return out
 }

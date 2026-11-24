@@ -997,6 +997,15 @@ describe('searchPlaces — corrected spellings', () => {
       expect(results[0].id).toBe('node/5215515121')
     })
 
+    test('yields to a correction that kept more of the typed words', async () => {
+      const named = { id: 'node/9', name: 'Warehouse', text_rank: 1, distance_m: 100 }
+      mockCorrections.mockImplementation(async () => fixes)
+      mockExecute.mockImplementation(async (q: any) => (isNamed(q) ? [named] : mentions(q, 'wearhouse') ? [store] : []))
+      const results = await searchPlaces({ query: "men's warehouse flatbush", lat: 40.684, lng: -73.976 })
+      expect(results[0].id).toBe('node/14003842716')
+      expect(results.map((r: any) => r.id)).not.toContain('node/9')
+    })
+
     test('is left out when the corrections kept that word as typed', async () => {
       // "prospect" matched as typed in Prospect Park; only "prak" was changed.
       const town = { id: 'node/1', name: 'Prospect', text_rank: 1, distance_m: 100 }

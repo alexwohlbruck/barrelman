@@ -120,14 +120,14 @@ describe('correctedAwayWords', () => {
   const fixes = new Map([['dimes', ['times']], ['square', ['squares']]])
 
   test('a word a name holds only as its correction', () => {
-    expect(correctedAwayWords(fixes, ['Times Square'])).toEqual(new Set(['dimes']))
+    expect(correctedAwayWords(fixes, 'Times Square')).toEqual(new Set(['dimes']))
   })
 
   test('not a word the name holds as typed', () => {
-    expect(correctedAwayWords(fixes, ['Dimes Square'])).toEqual(new Set())
+    expect(correctedAwayWords(fixes, 'Dimes Square')).toEqual(new Set())
   })
 
   test('matches through accents, case and punctuation', () => {
-    expect(correctedAwayWords(new Map([['cafe', ['cafes']]]), ["CAFÉS d'Été"])).toEqual(new Set(['cafe']))
+    expect(correctedAwayWords(new Map([['cafe', ['cafes']]]), "CAFÉS d'Été")).toEqual(new Set(['cafe']))
   })
 })

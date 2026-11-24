@@ -9,7 +9,7 @@ import { estimateMatches } from './lexeme-stats.service'
 import { LARGE_AREA_CELL, LARGE_AREA_PREDICATE, cellRanges, largeAreaIndexReady } from './large-area-search.service'
 import { executeWithin } from '../lib/bounded-query'
 import { reconcileTransitHits } from '../lib/transit-search'
-import { buildTsQueryText, correctedAwayWords, foldName, isStreetQuery } from '../lib/search-query'
+import { buildTsQueryText, cleanWords, correctedAwayWords, foldName, isStreetQuery } from '../lib/search-query'
 import { correctionsFor, hasMisspelling } from './search-lexicon.service'
 import { envNumber } from '../config/env'
 
@@ -814,7 +814,12 @@ export async function searchPlaces(
       const [named, rows] = await Promise.all([namedFts(local, [...fixes.keys()]), corrected])
       // "dimes square" corrected to Times Square; the restaurant Dimes proves
       // "dimes" was meant. A word the corrections kept as typed proves nothing.
-      const changed = correctedAwayWords(fixes, rows.map((r: any) => r.name ?? ''))
+      const changedByRow = rows.map((r: any) => correctedAwayWords(fixes, r.name ?? ''))
+      // A named place holds one typed word. A correction that kept more of
+      // them as typed is the better match: Men's Wearhouse, not "Warehouse".
+      const typedWords = cleanWords(correctedWords).length
+      if (changedByRow.some((c) => c.size > 0 && typedWords - c.size > 1)) return rows
+      const changed = new Set(changedByRow.flatMap((c) => [...c]))
       return [...named.filter((r: any) => changed.has(foldName(r.name ?? ''))), ...rows]
     }
 
