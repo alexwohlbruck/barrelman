@@ -852,8 +852,8 @@ function lifts(d: number[], short: number[], marks: number[]): number[] {
  * crosses (each held level for CURVE metres), and is held to MAX_GRADE from
  * each anchored end. A deck with `pins` (its nodes tagged `ele`, already
  * trusted) runs through them instead (see `pinned`), lifted where it would not
- * clear something only between the pins and ends either side of it; a pin at
- * an end is that end's height.
+ * clear something only between the pins and ends either side of it, less what
+ * those pins show it overstated; a pin at an end is that end's height.
  */
 export function solve(
   chain: Pick<Chain, 'points' | 'layer'> & { grounded: [boolean, boolean]; el?: boolean },
@@ -884,7 +884,16 @@ export function solve(
   const heldEnds: [number | null, number | null] = [anchored[0] ? za : null, anchored[1] ? zb : null]
   if (!inner.length) return align(d, lower, heldEnds, chain.el)
   const base = pinned(d, inner, heldEnds)
-  const up = lifts(d, lower.map((v, i) => v - base[i]), [0, ...inner.map(p => p.at), total])
+  const marks = [0, ...inner.map(p => p.at), total]
+  // A pin below what the deck is said to clear at it shows that clearance overstated: between pins it is eased by what the pins either side show.
+  const over = [0, ...inner.map(p => Math.max(0, ...needs.filter(n => Math.abs(n.at - p.at) <= CURVE / 2).map(n => n.height - p.height))), 0]
+  const eased = d.map(s => {
+    let m = 1
+    while (m < marks.length - 1 && marks[m] < s) m++
+    const t = marks[m] > marks[m - 1] ? (s - marks[m - 1]) / (marks[m] - marks[m - 1]) : 0
+    return over[m - 1] + (over[m] - over[m - 1]) * Math.min(1, Math.max(0, t))
+  })
+  const up = lifts(d, lower.map((v, i) => v - base[i] - eased[i]), marks)
   return base.map((v, i) => v + up[i])
 }
 

@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.64] - 2026-11-24
+
+### Fixed
+
+* A walkway pinned to measured heights follows them between its pins instead of bulging metres above them, as the Williamsburg Bridge's paths did where a clearance over the roadway beside them was assumed too large. Rebuild the bridge decks after upgrading.
+* Cycling routes keep to a bike track's line through junctions. They no longer swerve across the avenue at sharrowed mixing zones, such as 6th Avenue's in Manhattan, or jog sideways where the number of lanes changes.
+
 ## [0.10.63] - 2026-11-23
 
 ### Fixed
