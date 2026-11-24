@@ -12,6 +12,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Fixed
 
+* Transit feeds with a few broken timetable rows import instead of being skipped: rows at flex zones or undefined stops are left out, padded stop ids are trimmed, and stray quotes in names are read as text. Ten US feeds, including Owensboro, Red Rose Transit and Orleans Express, update again.
 * A place named exactly what you typed now ranks above a spelling correction of that word. "dimes square" finds the restaurant Dimes on Canal St instead of only Times Square.
 
 ## [0.10.66] - 2026-11-24

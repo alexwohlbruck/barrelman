@@ -19,6 +19,7 @@ import {
   deriveStopRoutes,
   parseGtfsRecords,
   groupStopTimes,
+  type StopTimesByTrip,
   parseStopParents,
   deriveTripPatterns,
   importTripPatterns,
@@ -138,22 +139,35 @@ export async function prepareFeedFile(filepath: string, feedInfo: GtfsFeedInfo) 
   if ([...stopTimes.keys()].some(id => !tripIds.has(id))) {
     throw new Error(`${filepath}: stop_times.txt references unknown trips`)
   }
-  const associations = deriveStopRoutes(trips, stopTimes, feedInfo.feedId)
+  const stopIds = new Set(stops.map(s => s.stopId))
+  const routeIds = new Set(routes.map(r => r.routeId))
+  const dropped = dropUnknownStops(stopTimes, stopIds)
+  if (dropped) console.warn(`  ! skipped ${dropped} stop_times rows at stops not in stops.txt (flex zones or missing stops)`)
+  const knownTrips = trips.filter(t => routeIds.has(t.route_id))
+  if (knownTrips.length < trips.length) console.warn(`  ! skipped ${trips.length - knownTrips.length} trips on routes not in routes.txt`)
+  const associations = deriveStopRoutes(knownTrips, stopTimes, feedInfo.feedId)
   if (!stops.length || !routes.length || !associations.length) {
     throw new NoFixedRouteService(`${filepath}: no stop served by a route (stops, routes or stop_times referencing them)`)
   }
-  const stopIds = new Set(stops.map(s => s.stopId))
-  const routeIds = new Set(routes.map(r => r.routeId))
-  if (associations.some(a => !stopIds.has(a.stopId) || !routeIds.has(a.routeId))) {
-    throw new Error(`${filepath}: timetable references unknown stops or routes`)
-  }
-  const patterns = deriveTripPatterns(trips, stopTimes, parseStopParents(stopsContent), feedInfo.feedId)
+  const patterns = deriveTripPatterns(knownTrips, stopTimes, parseStopParents(stopsContent), feedInfo.feedId)
   const transfers = transfersContent ? parseTransfers(transfersContent, feedInfo.feedId) : []
   const shapes = shapesContent ? parseShapes(shapesContent) : new Map<string, [number, number][]>()
   const routeShapes = deriveRouteShapes(tripsContent)
   const bikesAllowed = deriveBikesAllowed(tripsContent)
 
   return { stops, routes, associations, patterns, transfers, shapes, routeShapes, bikesAllowed }
+}
+
+/** Removes rows at stops the feed never defines, in place; returns how many. */
+export function dropUnknownStops(stopTimes: StopTimesByTrip, stopIds: Set<string>): number {
+  let dropped = 0
+  for (const [tripId, rows] of stopTimes) {
+    const kept = rows.filter(r => stopIds.has(r.stopId))
+    dropped += rows.length - kept.length
+    if (!kept.length) stopTimes.delete(tripId)
+    else if (kept.length < rows.length) stopTimes.set(tripId, kept)
+  }
+  return dropped
 }
 
 export async function readZipEntry(zip: JSZip, filename: string): Promise<string | null> {

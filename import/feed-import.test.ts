@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { flatTransferTime, mergeTransfersTxt, type StationTime } from './feed-import'
+import { dropUnknownStops, flatTransferTime, mergeTransfersTxt, type StationTime } from './feed-import'
+import { groupStopTimes } from '../src/services/gtfs.service'
 
 const HEADER = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time'
 
@@ -237,5 +238,14 @@ describe('mergeTransfersTxt — fare gates on street transfers', () => {
   it('a pair the feed connects keeps its time', () => {
     const merged = mergeTransfersTxt(`${HEADER}\n423,A41,2,300\n`, `${HEADER}\n423N,A41N,2,221\n`, STOPS, new Map(), rail)
     expect(merged).toContain('423N,A41N,2,221')
+  })
+})
+
+describe('dropUnknownStops', () => {
+  it('drops rows at flex zones and missing stops, and trips left empty', () => {
+    const times = groupStopTimes('trip_id,stop_id,stop_sequence\na,s1,1\na,radius_1207_s_1,2\na,s2,3\nb,area_650,1\n')
+    expect(dropUnknownStops(times, new Set(['s1', 's2']))).toBe(2)
+    expect(times.get('a')?.map(r => r.stopId)).toEqual(['s1', 's2'])
+    expect(times.has('b')).toBe(false)
   })
 })
