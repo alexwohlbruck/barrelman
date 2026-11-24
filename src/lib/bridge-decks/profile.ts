@@ -37,6 +37,8 @@ export type Way = {
   pins?: Array<{ vertex: number; height: number; under?: boolean }>
   /** Its own `ele`, a least height for its deck at its middle. */
   ele?: number
+  /** Mapped as a road's sidewalk (`footway=sidewalk`). */
+  sidewalk?: boolean
 }
 
 /** A height a deck stands at exactly, at a distance along it: a node tagged `ele`. */
@@ -64,6 +66,8 @@ export type Chain = {
   paths?: Array<{ side: 0 | 1; out: number; from: number; to: number }>
   /** Its ways' nodes tagged `ele`, by where they lie. */
   pins?: Array<{ point: Point; height: number; under?: boolean }>
+  /** Every way of it mapped as a road's sidewalk. */
+  sidewalk?: boolean
 }
 
 /** Steepest a deck climbs, as a grade. */
@@ -239,7 +243,7 @@ export function chains(ways: Way[]): Chain[] {
     const pins = [...shared.values()]
     out.push({
       ways: members.map(m => m.id), points, kind: start.kind, layer: Math.max(...members.map(m => m.layer)), edges: [width / 2, width / 2], road: members.find(m => m.road)?.road,
-      ...(pins.length ? { pins } : {}),
+      ...(pins.length ? { pins } : {}), ...(members.every(m => m.sidewalk) ? { sidewalk: true } : {}),
     })
   }
   return out
@@ -338,13 +342,20 @@ export function fitEdges(decks: Chain[], outline: Point[], rivals: Chain[] = [])
   })
 }
 
-/** Farthest a sidewalk's near edge may lie past a road deck's edge and still be part of its deck, in metres: beyond, it is a walkway of its own. */
+/**
+ * Farthest a path's near edge may lie past a road deck's edge and still be part
+ * of its deck, in metres: beyond, it is a walkway of its own. A way mapped as
+ * the road's sidewalk reaches farther, as a carriageway is often wider than its
+ * lanes give.
+ */
 const ABUTTING = 2
+const SIDEWALK_REACH = 6
 
 /**
  * Sidewalks and cycle tracks mapped as bridges of their own beside a road
- * bridge, folded into its deck (`paths`): the deck widens to take them in
- * where they run beside it (see `widen`), not along the whole of it.
+ * bridge, folded into the nearest road deck they abut (`paths`): the deck
+ * widens to take them in where they run beside it (see `widen`), not along the
+ * whole of it.
  */
 export function absorbPaths(decks: Chain[]): Chain[] {
   const roads = decks.filter(d => d.kind === 'road').map(d => ({ ...d, ways: [...d.ways], paths: [...(d.paths ?? [])] }))
@@ -356,14 +367,17 @@ export function absorbPaths(decks: Chain[]): Chain[] {
     }
     const samples = path.points.flatMap((p, i) => (i ? [[(p[0] + path.points[i - 1][0]) / 2, (p[1] + path.points[i - 1][1]) / 2] as Point, p] : [p]))
     const width = path.edges[0] + path.edges[1]
-    const host = roads.find(road => {
-      if (road.layer !== path.layer) return false
+    const reach = path.sidewalk ? SIDEWALK_REACH : ABUTTING
+    let [host, nearest] = [undefined as (typeof roads)[number] | undefined, Infinity]
+    for (const road of roads) {
+      if (road.layer !== path.layer) continue
       const near = samples.map(q => beside(road.points, q))
       const side = near[0].left
       const inside = near.filter(n => n.alongside).map(n => n.distance)
-      return inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
-        near.every(n => n.left === side && n.distance - width / 2 < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + ABUTTING)
-    })
+      const abuts = inside.length >= near.length / 2 && Math.max(...inside) - Math.min(...inside) < 4 &&
+        near.every(n => n.left === side && n.distance - width / 2 < Math.max((road.fit ?? road.edges)[side ? 0 : 1], 1) + reach)
+      if (abuts && Math.min(...inside) < nearest) [host, nearest] = [road, Math.min(...inside)]
+    }
     if (!host) {
       kept.push(path)
       continue
@@ -546,19 +560,37 @@ export function besideGround(centre: number[], left: number[], right: number[], 
 /**
  * Where a grounded end's road is read beyond it (metres out, every `step`), the
  * stretch fitted for its level, how far below that level the end's own ground
- * must lie to be a hole, and the most a deck runs on to cross one.
+ * must lie to be a hole, the most a deck runs on to cross one, the grade,
+ * steeper than a street's, past which ground climbing from the end is a bank,
+ * and how far past a bank's top the ground must climb no steeper.
  */
-export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25 }
+export const LANDING = { step: 2, reach: 40, from: 16, to: 36, hole: 0.6, run: 25, bank: 0.2, top: 8 }
+
+/** How far out, and how high, a grounded end's road runs on to; `bank` where the end lies on the bank of a cut rather than in a hollow. */
+export type Landing = { height: number; run: number; bank: boolean }
 
 /**
  * The road a grounded end lands on, read from the ground `beyond` it (one
  * sample every LANDING.step metres out). Lidar terrain has its bridges taken
  * out, and often the abutments with them: the end of the way then lies in a
- * hollow while the road a little farther out runs on at deck level. Null where
- * the end's own ground is the road's; else the road's height and how far out
- * the hollow ends, where the deck runs on to.
+ * hollow, or partway up the bank of the cut it crosses, while the road a
+ * little farther out runs on at deck level. Null where the end's own ground
+ * is the road's; else the road's height and how far out it is reached, where
+ * the deck runs on to.
  */
-export function landing(beyond: number[], end: number): { height: number; run: number } | null {
+export function landing(beyond: number[], end: number): Landing | null {
+  return levelled(beyond, end) ?? bankTop(beyond, end)
+}
+
+/** Index of the last sample of the bank climbing from the end, each steeper than LANDING.bank; -1 where the ground does not climb so. */
+function climbed(beyond: number[], end: number): number {
+  let top = -1
+  while (top + 1 < beyond.length && beyond[top + 1] - (top < 0 ? end : beyond[top]) > LANDING.bank * LANDING.step) top++
+  return top
+}
+
+/** The road beyond fitted level between LANDING.from and LANDING.to, run on to where it is first reached. */
+function levelled(beyond: number[], end: number): Landing | null {
   const fit = beyond.flatMap((z, j) => {
     const s = (j + 1) * LANDING.step
     return s >= LANDING.from && s <= LANDING.to && !Number.isNaN(z) ? [[s, z]] : []
@@ -575,7 +607,20 @@ export function landing(beyond: number[], end: number): { height: number; run: n
   const run = out < 0 ? Infinity : (out + 1) * LANDING.step
   // A hollow dips below the road it lies in, between the end and the road coming back up.
   const dipped = beyond.slice(0, Math.max(0, out)).some((z, j) => z < level((j + 1) * LANDING.step) - LANDING.hole)
-  return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run }
+  return run > LANDING.run || !(dipped || out === 0) ? null : { height: level(run), run, bank: climbed(beyond, end) >= out }
+}
+
+/**
+ * Where ground climbing from the end steeper than a street stops climbing: the
+ * top of the bank, where a road beyond that is not level resumes. Ground still
+ * climbing so just past it is a hillside, as over a tunnel's portal.
+ */
+function bankTop(beyond: number[], end: number): Landing | null {
+  const top = climbed(beyond, end)
+  const run = (top + 1) * LANDING.step
+  if (top < 0 || run > LANDING.run || beyond[top] - end < LANDING.hole) return null
+  const past = beyond.slice(top + 1, top + 1 + LANDING.top / LANDING.step)
+  return past.some((z, j) => z - beyond[top] > LANDING.bank * (j + 1) * LANDING.step) ? null : { height: beyond[top], run, bank: true }
 }
 
 /** What a deck must stand clear of at a distance along it: an absolute height for its surface. */
@@ -807,8 +852,8 @@ function lifts(d: number[], short: number[], marks: number[]): number[] {
  * crosses (each held level for CURVE metres), and is held to MAX_GRADE from
  * each anchored end. A deck with `pins` (its nodes tagged `ele`, already
  * trusted) runs through them instead (see `pinned`), lifted where it would not
- * clear something only between the pins and ends either side of it; a pin at
- * an end is that end's height.
+ * clear something only between the pins and ends either side of it, less what
+ * those pins show it overstated; a pin at an end is that end's height.
  */
 export function solve(
   chain: Pick<Chain, 'points' | 'layer'> & { grounded: [boolean, boolean]; el?: boolean },
@@ -839,7 +884,16 @@ export function solve(
   const heldEnds: [number | null, number | null] = [anchored[0] ? za : null, anchored[1] ? zb : null]
   if (!inner.length) return align(d, lower, heldEnds, chain.el)
   const base = pinned(d, inner, heldEnds)
-  const up = lifts(d, lower.map((v, i) => v - base[i]), [0, ...inner.map(p => p.at), total])
+  const marks = [0, ...inner.map(p => p.at), total]
+  // A pin below what the deck is said to clear at it shows that clearance overstated: between pins it is eased by what the pins either side show.
+  const over = [0, ...inner.map(p => Math.max(0, ...needs.filter(n => Math.abs(n.at - p.at) <= CURVE / 2).map(n => n.height - p.height))), 0]
+  const eased = d.map(s => {
+    let m = 1
+    while (m < marks.length - 1 && marks[m] < s) m++
+    const t = marks[m] > marks[m - 1] ? (s - marks[m - 1]) / (marks[m] - marks[m - 1]) : 0
+    return over[m - 1] + (over[m] - over[m - 1]) * Math.min(1, Math.max(0, t))
+  })
+  const up = lifts(d, lower.map((v, i) => v - base[i] - eased[i]), marks)
   return base.map((v, i) => v + up[i])
 }
 

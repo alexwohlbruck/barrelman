@@ -10,7 +10,57 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.65] - 2026-11-24
+
 ### Fixed
+
+* Bikeways on bridges drawn as 3D models, like the Manhattan and Williamsburg bridges and the George Washington Bridge's North Walk, are painted green over the model, as the Brooklyn Bridge's bike lane already was. Rebuild the bridge decks after upgrading.
+* A two-way bike lane on a one-way street, like Plaza Street East at Grand Army Plaza, shows bike symbols facing both ways, each in its own half, and a contraflow lane's symbols face its riders. Rebuild road markings after upgrading.
+
+## [0.10.64] - 2026-11-24
+
+### Fixed
+
+* A walkway pinned to measured heights follows them between its pins instead of bulging metres above them, as the Williamsburg Bridge's paths did where a clearance over the roadway beside them was assumed too large. Rebuild the bridge decks after upgrading.
+* Cycling routes keep to a bike track's line through junctions. They no longer swerve across the avenue at sharrowed mixing zones, such as 6th Avenue's in Manhattan, or jog sideways where the number of lanes changes.
+
+## [0.10.63] - 2026-11-23
+
+### Fixed
+
+* A portolan sync no longer stops partway through re-importing corrected feeds. A feed with no fixed-route service (a flex-only paratransit feed, for one) is skipped as the GTFS importer skips it, and any other failed import keeps that feed's previous zip and rows. The run carries on and rebuilds MOTIS, then reports the failures. Until now one such feed ended the run before MOTIS was rebuilt, so corrected schedules never reached riders.
+* **Portolan Check for Updates** takes **Parallel feed builds**, and its seeded schedule uses 2. A first check on a workspace with no recorded upstream versions rebuilds every feed.
+* A portolan feed whose GTFS zip goes missing from the workspace no longer drops off the map without a word. **Portolan Check for Updates** downloads any missing zip, and fails when a hand-placed feed has none. It now ships as a seeded daily schedule; turn it on under Schedules. Needs portolan 0.5.4 or later.
+* Streets on a lid over a sunken motorway, like Atlanta's Memorial Drive over the Downtown Connector, lie on the lid instead of standing up to 6 m above it, and roads crossing at a junction there meet at one height. Ramps and parking aisles on such a lid cover their own lanes, not the whole bridge. Rebuild the bridge decks after upgrading.
+* A short bridge over a cut carries on level to the top of each bank and meets the street there, instead of dipping toward the bottom of the cut or stopping short of the bank. A road's mapped sidewalks join its deck rather than standing apart as separate slabs. Rebuild the bridge decks after upgrading.
+* Walkways on bridges drawn as 3D models, like the Brooklyn, Williamsburg and Golden Gate bridges, are left to the model or meet it, instead of a second walkway standing metres above or below it. Rebuild the bridge decks after upgrading.
+
+## [0.10.62] - 2026-11-23
+
+### Changed
+
+* With `NODE_ENV=production`, the API refuses to start while `BARRELMAN_API_KEY` or `BARRELMAN_DB_PASSWORD` is still the published placeholder. See troubleshooting for changing the database password in place.
+* Routing, isochrone, transit and map-matching requests answer an engine failure with a generic 502 and a request id instead of the engine's own error text. Errors from a rejected request (4xx) still pass through.
+* `POST /search` refuses a route corridor longer than 5000 points.
+
+## [0.10.61] - 2026-11-23
+
+### Added
+
+* Walking routes cross plazas and other pedestrian areas directly, curving smoothly around fountains, buildings and walls without leaving the area, instead of following its outline. ETAs follow the curve. Rebuild GraphHopper after upgrading.
+
+## [0.10.60] - 2026-11-22
+
+### Fixed
+
+* Realtime no longer drops trains an agency runs on a trip its timetable only has for another day, as when a night reroute uses next week's trips. They are added with their live times.
+* A train running early, or matched to a later schedule, no longer shows a departure from stops it has already passed.
+
+## [0.10.59] - 2026-11-21
+
+### Fixed
+
+* The Mike O'Callaghan–Pat Tillman Memorial Bridge's deck rises to its true crest, 269.6 m over the Colorado River, instead of running straight between its ends up to 2.5 m low. After upgrading, run Build Bridge Decks over the canyon (`--bbox -114.746,36.010,-114.736,36.016`).
 
 * Transit plans no longer send riders through an entrance that only reaches the other direction's platform. Entrances signed for a direction ("A,C trains to Manhattan", "Uptown", "Inbound only", "Richtung …") are matched against the ride. Where an agency's GTFS pathways leave an entrance unconnected to a platform, station paths no longer guess a route between them. Rebuild station paths after upgrading.
 

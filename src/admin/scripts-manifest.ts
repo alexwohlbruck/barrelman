@@ -947,6 +947,16 @@ export const SCRIPTS: ScriptDef[] = [
         description: 'Required unless already set in the server environment.',
       },
       {
+        name: 'jobs',
+        label: 'Parallel feed builds',
+        type: 'number',
+        apply: 'flag',
+        flag: '--jobs',
+        placeholder: 'blank = portolan default (min(4, CPUs))',
+        description:
+          'Passed to the patch the check runs on what changed. A first check on a workspace with no recorded shas counts every feed as changed, which is a full rebuild — set 1 or 2 on a host that also serves the API.',
+      },
+      {
         name: 'dry-run',
         label: 'Dry run (diff only, no downloads)',
         type: 'boolean',
@@ -957,7 +967,7 @@ export const SCRIPTS: ScriptDef[] = [
     ],
     source: 'import/portolan-sync.ts',
     notes:
-      'The intended nightly job for portolan-corrected feeds — point a daily schedule at this (Schedules page), the same way gtfs-watch is scheduled for plain feeds.',
+      'The nightly job for portolan-corrected feeds, seeded as a disabled daily schedule — turn it on under Schedules. It is the only job that fetches portolan\'s zips: it re-downloads any registered feed whose zip is missing from the workspace, and fails when a feed with no Transitland onestop has no zip, since nothing can fetch that one. A failure here means a line is off the map.',
   },
   {
     id: 'transit-station-links',
@@ -1457,7 +1467,7 @@ export const SCRIPTS: ScriptDef[] = [
     id: 'routing-graphhopper',
     name: 'Rebuild GraphHopper',
     description:
-      'Build a new routing graph from the PBF in a separate container (with the server stopped, unless built alongside), check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
+      'Add straight paths across pedestrian areas to the PBF (region-walk.osm.pbf), build a new routing graph from it in a separate container (with the server stopped, unless built alongside), check it, then swap it in and restart GraphHopper. Skips itself when the serving graph is already built from the current extract.',
     category: 'routing',
     danger: 'caution',
     longRunning: true,
@@ -1539,6 +1549,18 @@ export const SCRIPTS: ScriptDef[] = [
     source: 'scripts/rebuild-valhalla.sh',
     notes:
       'No Valhalla service ships in docker-compose.yml — this is only useful on a deployment that adds one. GraphHopper is the street router the API actually calls.',
+  },
+  {
+    id: 'routing-graphhopper-osm',
+    name: 'Prepare GraphHopper OSM',
+    description:
+      'Produce region-walk.osm.pbf: the extract plus straight paths across pedestrian areas, so walking routes cross a plaza rather than following its outline. Rebuild GraphHopper runs this first.',
+    category: 'routing',
+    danger: 'safe',
+    longRunning: true,
+    confirm: false,
+    exec: { kind: 'process', command: 'bash', args: ['scripts/prepare-graphhopper-osm.sh'] },
+    source: 'scripts/prepare-graphhopper-osm.sh',
   },
   {
     id: 'routing-motis-osm',

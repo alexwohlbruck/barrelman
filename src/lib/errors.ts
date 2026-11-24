@@ -30,3 +30,24 @@ export function serverError(
   set.status = status
   return { error: message, requestId }
 }
+
+/**
+ * Answer a failed call to a routing engine (GraphHopper, MOTIS). A 4xx means
+ * the engine rejected what we passed on, so its body is useful to the caller
+ * and passes through; a 5xx is the engine failing, and its body can carry
+ * internal hosts and stack traces, so it becomes a generic 502.
+ */
+export function upstreamError(
+  request: Request,
+  set: { status?: number | string },
+  err: { statusCode: number; body: string },
+  message: string,
+): unknown {
+  if (err.statusCode >= 500) return serverError(request, set, err, message, 502)
+  set.status = err.statusCode
+  try {
+    return JSON.parse(err.body)
+  } catch {
+    return { error: err.body }
+  }
+}

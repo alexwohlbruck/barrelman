@@ -125,6 +125,15 @@ describe('absorbPaths', () => {
     const walkway: Chain = { ways: [2], points: [east(0, 11), east(40, 11)], kind: 'path', layer: 1, edges: [1.5, 1.5] }
     expect(absorbPaths([road, walkway])).toHaveLength(2)
   })
+
+  it('folds in a road\'s own sidewalk across a carriageway wider than its lanes, into the nearer of two roads', () => {
+    const road = (id: number, north: number): Chain => ({ ways: [id], points: resample([east(0), east(100)].map(p => [p[0], east(0, north)[1]] as Point), 6), kind: 'road', layer: 1, edges: [4, 4] })
+    const walk = (sidewalk: boolean): Chain => ({ ways: [3], points: [east(0, 9.5), east(40, 9.5)], kind: 'path', layer: 1, edges: [1.5, 1.5], ...(sidewalk ? { sidewalk } : {}) })
+    expect(absorbPaths([road(1, 0), walk(false)])).toHaveLength(2)
+    expect(absorbPaths([road(1, 0), walk(true)])).toHaveLength(1)
+    const decks = absorbPaths([road(1, 0), road(2, 16), walk(true)])
+    expect(decks.find(d => d.ways.includes(3))?.ways[0]).toBe(2)
+  })
 })
 
 describe('absorbTracks', () => {
@@ -160,8 +169,24 @@ describe('landing', () => {
     expect(land?.run).toBeLessThanOrEqual(14)
   })
 
-  it('never takes a road climbing steeper than a deck may for a hollow', () => {
-    for (const grade of [0.07, 0.1, 0.15]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  it('never takes a road climbing steeper than a deck may for a hollow, nor a steep street for a bank', () => {
+    for (const grade of [0.07, 0.1, 0.15, 0.25]) expect(landing(road(s => 200 + s * grade), 200)).toBeNull()
+  })
+
+  it('finds the top of a bank an end lies partway up, where the road beyond falls away from it', () => {
+    // Virginia Ave over the Beltline: the way ends on the blurred bank of the cut, the street crests 6 m out and descends.
+    const land = landing(road(s => (s <= 6 ? 274.2 + s * 0.48 : 277.08 - (s - 6) * 0.11)), 274.2)
+    expect(land).toEqual({ height: expect.closeTo(277.08, 1), run: 6, bank: true })
+  })
+
+  it('takes no hillside climbing on past a ledge for a bank, as over a tunnel\'s portal', () => {
+    // Bay Bridge at Yerba Buena Island: the ground levels for a few metres, then climbs on over the tunnel.
+    expect(landing(road(s => (s <= 8 ? 57.5 + s * 1.6 : s <= 12 ? 70.3 : 70.3 + (s - 12) * 0.9)), 57.5)).toBeNull()
+  })
+
+  it('tells a bank climbing from the end from a hollow the road dips through', () => {
+    expect(landing(road(s => Math.min(205, 199 + s)), 199)?.bank).toBe(true)
+    expect(landing(road(s => (s < 12 ? 193 : 200)), 193)?.bank).toBe(false)
   })
 
   it('leaves an end alone where the road beyond carries on at its height, or a long way down', () => {
@@ -252,6 +277,19 @@ describe('a deck pinned by its nodes\' ele', () => {
     expect(z[0]).toBe(16)
     const i = d.findIndex(s => s >= 1435)
     expect(z[i]).toBeCloseTo(75 + ((30 - 75) * (d[i] - 1435)) / (CORONADO.length - 1435), 3)
+  })
+
+  it('follows pins under a clearance they show is overstated, as a walkway pinned beside a roadway', () => {
+    // Held 6.5 m over a roadway the whole way out; the pins put it 3 m over.
+    const pins = [300, 600, 900, 1200].map(at => ({ at, height: 20 + at / 100 }))
+    const z = solve(deck, bay, [...water, ...d.filter(s => s > 100 && s < 1300).map(s => ({ at: s, height: 23.5 + s / 100 }))], [null, null], pins)
+    const off = d.flatMap((s, i) => (s >= 300 && s <= 1200 ? [[Math.round(s), Math.round((z[i] - (20 + s / 100)) * 100) / 100]] : [])).filter(([, e]) => Math.abs(e) >= 0.3)
+    expect(off).toEqual([])
+  })
+
+  it('still clears a road it crosses between two pins', () => {
+    const z = solve(deck, bay, [...water, { at: 750, height: 32 }], [null, null], [{ at: 600, height: 26 }, { at: 900, height: 29 }])
+    expect(z[d.findIndex(s => s >= 750)]).toBeGreaterThanOrEqual(32 - 1e-9)
   })
 
   it('is never cut to what MAX_GRADE reaches from its ends', () => {
