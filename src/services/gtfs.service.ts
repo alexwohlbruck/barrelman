@@ -711,6 +711,53 @@ const GTFS_CSV = {
 } as const
 
 /**
+ * Some feeds write a quote inside a quoted field without doubling it
+ * (`"Rt. 30 at King"s"`), which no strict CSV parser accepts. Retry those with
+ * every quote that cannot close its field doubled.
+ */
+function parseGtfsCsv(content: string): GtfsRecord[] {
+  try {
+    return parse<GtfsRecord>(content, GTFS_CSV)
+  } catch (err) {
+    if ((err as { code?: string }).code !== 'CSV_NON_TRIMABLE_CHAR_AFTER_CLOSING_QUOTE') throw err
+    return parse<GtfsRecord>(repairStrayQuotes(content), GTFS_CSV)
+  }
+}
+
+export function repairStrayQuotes(content: string): string {
+  let out = ''
+  let quoted = false
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i]
+    if (!quoted) {
+      const prev = content[i - 1]
+      if (c === '"' && (prev === undefined || prev === ',' || prev === '\n')) quoted = true
+      out += c
+      continue
+    }
+    if (c !== '"') {
+      out += c
+      continue
+    }
+    if (content[i + 1] === '"') {
+      out += '""'
+      i++
+      continue
+    }
+    let j = i + 1
+    while (content[j] === ' ' || content[j] === '\t') j++
+    const next = content[j]
+    if (next === undefined || next === ',' || next === '\n' || next === '\r') {
+      quoted = false
+      out += c
+    } else {
+      out += '""'
+    }
+  }
+  return out
+}
+
+/**
  * Parse stops.txt from a GTFS ZIP buffer.
  * Returns an array of stop records ready for DB insert.
  */
@@ -729,7 +776,7 @@ export function parseStops(
   wheelchairBoarding: number
   platformCode: string | null
 }> {
-  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
+  const records = parseGtfsCsv(csvContent)
 
   return records
     .filter((r: any) => r.stop_lat && r.stop_lon)
@@ -766,7 +813,7 @@ export function parseRoutes(
   routeTextColor: string | null
   routeUrl: string | null
 }> {
-  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
+  const records = parseGtfsCsv(csvContent)
 
   return records.map((r: any) => ({
     routeId: r.route_id,
@@ -789,7 +836,7 @@ export function parseRoutes(
  * Parse agency.txt to build agency_id → agency_name map.
  */
 export function parseAgencies(csvContent: string): Map<string, string> {
-  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
+  const records = parseGtfsCsv(csvContent)
 
   const map = new Map<string, string>()
   for (const r of records) {
@@ -810,7 +857,7 @@ type GtfsRecord = Record<string, string>
 
 /** Parse a GTFS CSV file into row records. */
 export function parseGtfsRecords(content: string): GtfsRecord[] {
-  return parse<GtfsRecord>(content, GTFS_CSV)
+  return parseGtfsCsv(content)
 }
 
 /** Split one CSV record that contains quotes: commas inside quotes, "" for a quote. */
@@ -948,7 +995,7 @@ export function deriveStopRoutes(
  * boards/alights a parent station) matches the platform ids in stop_times.
  */
 export function parseStopParents(stopsContent: string): Map<string, string> {
-  const records = parse<GtfsRecord>(stopsContent, GTFS_CSV)
+  const records = parseGtfsCsv(stopsContent)
   const map = new Map<string, string>()
   for (const r of records) {
     if (!r.stop_id) continue
@@ -1042,7 +1089,7 @@ export function deriveTripPatterns(
 export function parseShapes(
   csvContent: string,
 ): Map<string, [number, number][]> {
-  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
+  const records = parseGtfsCsv(csvContent)
 
   // Group points by shape_id, then sort by sequence
   const raw = new Map<string, Array<{ seq: number; lat: number; lng: number }>>()
@@ -1075,7 +1122,7 @@ export function parseShapes(
 export function deriveRouteShapes(
   tripsContent: string,
 ): Map<string, string> {
-  const records = parse<GtfsRecord>(tripsContent, GTFS_CSV)
+  const records = parseGtfsCsv(tripsContent)
 
   // Count shape_id occurrences per route_id
   const routeShapeCounts = new Map<string, Map<string, number>>()
@@ -1120,7 +1167,7 @@ export function deriveRouteShapes(
 export function deriveBikesAllowed(
   tripsContent: string,
 ): Map<string, number> {
-  const records = parse<GtfsRecord>(tripsContent, GTFS_CSV)
+  const records = parseGtfsCsv(tripsContent)
 
   // Track per-route: total trips, trips with bikes_allowed=1
   const routeStats = new Map<string, { total: number; allowed: number }>()
@@ -1453,7 +1500,7 @@ export function parseTransfers(
   csvContent: string,
   feedId: string,
 ): Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> {
-  const records = parse<GtfsRecord>(csvContent, GTFS_CSV)
+  const records = parseGtfsCsv(csvContent)
   const out: Array<{ feedId: string; fromStopId: string; toStopId: string; transferType: number; minTransferTime: number | null }> = []
   for (const r of records) {
     if (!r.from_stop_id || !r.to_stop_id) continue
@@ -2327,6 +2374,7 @@ const KEY_COLUMNS: Record<string, string[]> = {
   'routes.txt': ['route_id', 'agency_id'],
   'calendar.txt': ['service_id'],
   'calendar_dates.txt': ['service_id'],
+  'stops.txt': ['stop_id', 'parent_station'],
 }
 
 function hasPaddedKeys(text: string, columns: string[]): boolean {

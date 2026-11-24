@@ -25,6 +25,7 @@ import {
   bboxCells,
   sanitizeGtfsZip,
   repairGtfsCsv,
+  repairStrayQuotes,
   resolveRtUrlsForFeed,
   FLEX_EXTENSION_FILES,
   retryingTransitlandLimits,
@@ -1130,6 +1131,22 @@ describe('sanitizeGtfsZip', () => {
     expect(await out.file('calendar.txt')!.async('string')).toBe('service_id,monday,start_date,end_date\n768200,1,20261002,20261212\n')
   })
 
+  test('trims a feed that pads its stop ids, so stop_times still finds them', async () => {
+    // Owensboro: " Dialysis Center__37.764933_-87.082830" in both tables
+    const buffer = await createTestZip({
+      'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\n1,OTS,https://x,America/Chicago\n',
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\n" Dialysis Center__1"," Dialysis Center",37.76,-87.08\n',
+      'stop_times.txt': 'trip_id,stop_sequence,stop_id\nt1,15," Dialysis Center__1"\n',
+    })
+    const { buffer: out, repairedFiles } = await sanitizeGtfsZip(buffer)
+    expect(repairedFiles).toContain('stops.txt')
+    const zip = await JSZip.loadAsync(out)
+    const stops = parseStops(await zip.file('stops.txt')!.async('string'), 'f')
+    const times = await zip.file('stop_times.txt')!.async('string')
+    expect(stops[0].stopId).toBe('Dialysis Center__1')
+    expect(deriveStopRoutes('route_id,trip_id\nR,t1\n', times, 'f')).toEqual([{ feedId: 'f', stopId: 'Dialysis Center__1', routeId: 'R' }])
+  })
+
   async function createTestZip(files: Record<string, string>): Promise<ArrayBuffer> {
     const zip = new JSZip()
     for (const [name, content] of Object.entries(files)) {
@@ -1590,4 +1607,18 @@ describe('retryingTransitlandLimits', () => {
     expect(response.status).toBe(429)
     expect(calls).toBe(3)
   })
+})
+
+describe('stray quotes', () => {
+  test('reads a quote left undoubled inside a quoted field as text', () => {
+    // RRTA's stops.txt: "Rt. 30 at King"s"
+    const stops = parseStops('stop_id,stop_name,stop_lat,stop_lon\n1440,"Rt. 30 at King"s",40.01,-76.15\n1441,"Plain",40.02,-76.16\n', 'f')
+    expect(stops.map(s => s.stopName)).toEqual(['Rt. 30 at King"s', 'Plain'])
+  })
+
+  test('leaves a well-formed file to the strict parser', () => {
+    expect(repairStrayQuotes('a,"b ""c""",d\n')).toBe('a,"b ""c""",d\n')
+    expect(repairStrayQuotes('a,NEGTL ",d\n')).toBe('a,NEGTL ",d\n')
+  })
+
 })
