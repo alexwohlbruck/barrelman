@@ -10,6 +10,12 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.66] - 2026-11-24
+
+### Fixed
+
+* Searching for a numbered line with its mode, like "4 train" or "7 line", returns the line first. Because the query starts with a digit, it was treated as an address, and street addresses such as "4 Trainor Place" pushed the line out of the results.
+
 ## [0.10.65] - 2026-11-24
 
 ### Fixed
