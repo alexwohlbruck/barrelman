@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  arrivalBearing, boardingHint, chooseEntrance, classifyTransfer, FARE_GATE_DELAY_S, guidanceSteps, positionIsMeasured,
+  arrivalBearing, boardingHint, platformWalkSeconds, chooseEntrance, classifyTransfer, FARE_GATE_DELAY_S, guidanceSteps, positionIsMeasured,
   representativeRow, routeSign, stationChanges, stationVisits, type RideLeg, type TransferFacts,
 } from './guidance'
 import type { PathStep, StationPath } from './types'
@@ -100,6 +100,27 @@ describe('boardingHint', () => {
 
   test('a short platform gets no hint', () => {
     expect(boardingHint({ axisBearing: 0, lengthM: 40 }, 0.9, 0, 1.3)).toBeNull()
+  })
+})
+
+describe('platformWalkSeconds', () => {
+  // A 150 m platform running due north; 0.0009 deg of latitude is about 100 m.
+  const platform = { axisBearing: 0, lengthM: 150, centre: { lat: 40.7, lng: -74 } }
+  const middle = { lat: 40.7, lng: -74 }
+
+  test('from the middle to the front of a northbound train is half the platform', () => {
+    expect(platformWalkSeconds(platform, middle, 1, 0, 1.5)).toBe(50)
+  })
+
+  test('a southbound train puts its front at the south end', () => {
+    const southEnd = { lat: 40.7 - 0.000675, lng: -74 }
+    expect(platformWalkSeconds(platform, southEnd, 1, 180, 1.5)).toBeLessThan(2)
+    expect(platformWalkSeconds(platform, southEnd, 0, 180, 1.5)).toBeGreaterThan(95)
+  })
+
+  test('reaching the platform at the spot already costs nothing', () => {
+    const northEnd = { lat: 40.7 + 0.000675, lng: -74 }
+    expect(platformWalkSeconds(platform, northEnd, 1, 0, 1.5)).toBeLessThan(2)
   })
 })
 

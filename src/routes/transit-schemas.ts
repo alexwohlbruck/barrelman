@@ -136,7 +136,11 @@ const transitLeg = {
         fraction: { type: 'number', description: '0 at the back of the train, 1 at the front.' },
         savesSeconds: { type: 'integer' },
         toward: { type: 'string', enum: ['exit', 'transfer'] },
-        landmark: nullable({ type: 'string' }),
+        landmark: nullable({ type: 'string', description: "The exit's corner label or name, or the line transferred to." }),
+        platformWalkSeconds: nullable({
+          type: 'integer',
+          description: 'Seconds along the boarding platform from where the walk in reaches it to this spot. Null when that walk is not drawn.',
+        }),
       },
     },
   },

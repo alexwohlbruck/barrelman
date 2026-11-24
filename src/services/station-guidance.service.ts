@@ -10,7 +10,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '../db'
 import {
   arrivalBearing, atStation, boardingHint, chooseEntrance, departureBearing, haversineM, classifyTransfer, guidanceSteps, isWalked, PLATFORM_REMAINDER_MIN_S,
-  platformRemainder, positionIsMeasured, representativeRow, routeSign, stationChanges, stationVisits, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
+  platformRemainder, platformWalkSeconds, positionIsMeasured, representativeRow, routeSign, stationChanges, stationVisits, type BoardingHint, type GuidanceStep, type TransferClass, type WalkContext,
 } from '../lib/station-graph/guidance'
 import { entranceSign, reachingPlatform, type RideDirection } from '../lib/station-graph/entrance-direction'
 import { DEFAULT_PARAMS } from '../lib/station-graph/params'
@@ -88,6 +88,8 @@ export interface BoardingPosition extends BoardingHint {
   toward: 'exit' | 'transfer'
   /** The exit's name or the line transferred to. */
   landmark: string | null
+  /** Seconds along the boarding platform from where the walk in reaches it to this spot; null when the walk isn't drawn. */
+  platformWalkSeconds: number | null
 }
 
 export interface GuidedLeg {
@@ -143,6 +145,8 @@ interface PlatformInfo {
   refs: string[]
   lat: number
   lng: number
+  /** Centroid of the platform's line, the middle of its axis. */
+  centre: { lat: number; lng: number }
 }
 
 interface EntranceInfo {
@@ -193,13 +197,14 @@ async function loadPlatforms(ids: string[]): Promise<Map<string, PlatformInfo>> 
   const rows = (await db.execute(sql`
     SELECT p.id, p.complex_id, p.name, p.level, p.axis_bearing, p.length_m, p.refs,
            ST_X(ST_PointOnSurface(p.geom)) AS lng, ST_Y(ST_PointOnSurface(p.geom)) AS lat,
+           ST_X(ST_Centroid(p.geom)) AS centre_lng, ST_Y(ST_Centroid(p.geom)) AS centre_lat,
            (SELECT g.name FROM station_complexes c JOIN geo_places g ON g.id = ANY(c.member_ids)
             WHERE c.id = p.complex_id ORDER BY g.centroid <-> ST_PointOnSurface(p.geom) LIMIT 1) AS station_name
     FROM station_platforms p WHERE p.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
   `)) as Array<Record<string, any>>
   return new Map(rows.map((r) => [r.id, {
     id: r.id, complexId: r.complex_id, name: r.name, stationName: r.station_name, level: r.level, axisBearing: r.axis_bearing,
-    lengthM: r.length_m, refs: r.refs ?? [], lat: r.lat, lng: r.lng,
+    lengthM: r.length_m, refs: r.refs ?? [], lat: r.lat, lng: r.lng, centre: { lat: r.centre_lat, lng: r.centre_lng },
   }]))
 }
 
@@ -515,6 +520,16 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
       if (row) transferRows.set(a, { row, next: b })
     }))
 
+    // Along the boarding platform from where the walk in meets it to the spot the hint names.
+    const boardingWalk = (ride: GuidedLeg, fraction: number): number | null => {
+      const walk = (ride.transfer?.walk ?? ride.entrance?.walk) || null
+      const end = walk?.geometry?.coordinates.at(-1)
+      const platform = walk?.to.kind === 'platform' ? platforms.get(walk.to.id) : undefined
+      const heading = ride.geometry ? departureBearing(ride.geometry.coordinates) : null
+      if (!end || !platform || heading === null) return null
+      return platformWalkSeconds(platform, { lng: end[0], lat: end[1] }, fraction, heading, walkMps, scale)
+    }
+
     for (const ride of legs.filter(atStation)) {
       const transfer = transferRows.get(ride)
       const row = transfer?.row ?? exitRows.get(ride)
@@ -528,6 +543,7 @@ export async function enrichStationGuidance(itineraries: Array<{ legs: GuidedLeg
         ...hint,
         toward: transfer ? 'transfer' : 'exit',
         landmark: transfer ? routeSign(transfer.next) : ride.exit ? ride.exit.cornerLabel ?? ride.exit.name : null,
+        platformWalkSeconds: boardingWalk(ride, hint.fraction),
       }
     }
   }
