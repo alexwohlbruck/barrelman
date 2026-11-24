@@ -241,6 +241,29 @@ export function boardingHint(
 }
 
 /**
+ * Seconds along the boarding platform from where the rider reaches it to the
+ * spot for `fraction` of the train, berthed with its front at the end it
+ * departs toward. `centre` is the platform's centroid, the middle of its axis.
+ */
+export function platformWalkSeconds(
+  platform: { axisBearing: number; lengthM: number; centre: { lat: number; lng: number } },
+  reached: { lat: number; lng: number },
+  fraction: number,
+  heading: number,
+  walkMps: number,
+  costScale = 1,
+): number {
+  const { centre, axisBearing, lengthM } = platform
+  if (lengthM <= 0) return 0
+  const away = haversineM(centre, reached)
+  const along = away < 0.1 ? 0 : away * Math.cos(toRad(bearing([centre.lng, centre.lat], [reached.lng, reached.lat]) - axisBearing))
+  const at = Math.min(1, Math.max(0, 0.5 + along / lengthM))
+  const diff = Math.abs(((heading - axisBearing + 540) % 360) - 180)
+  const target = diff < 90 ? fraction : 1 - fraction
+  return Math.round((Math.abs(target - at) * lengthM * costScale) / walkMps)
+}
+
+/**
  * A boarding hint needs the stairs measured along the platform: a walked
  * path whose first stretch, to the first stair or lift, is not a bridged gap.
  */
