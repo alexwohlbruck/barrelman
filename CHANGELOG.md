@@ -10,6 +10,13 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.10.65] - 2026-11-24
+
+### Fixed
+
+* Bikeways on bridges drawn as 3D models, like the Manhattan and Williamsburg bridges and the George Washington Bridge's North Walk, are painted green over the model, as the Brooklyn Bridge's bike lane already was. Rebuild the bridge decks after upgrading.
+* A two-way bike lane on a one-way street, like Plaza Street East at Grand Army Plaza, shows bike symbols facing both ways, each in its own half, and a contraflow lane's symbols face its riders. Rebuild road markings after upgrading.
+
 ## [0.10.64] - 2026-11-24
 
 ### Fixed
