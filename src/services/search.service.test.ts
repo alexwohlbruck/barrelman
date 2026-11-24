@@ -14,7 +14,7 @@ import * as realCache from '../lib/cache'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockExecute = mock(async () => [] as any[])
+const mockExecute = mock(async (_q?: any): Promise<any[]> => [])
 const mockGenerateQueryEmbedding = mock(async () => [0.1, 0.2, 0.3] as number[])
 
 const searchCacheStore = new Map<string, any>()
