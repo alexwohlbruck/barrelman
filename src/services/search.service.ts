@@ -934,6 +934,7 @@ export async function searchPlaces(
         seen.add(r.id)
         if (pinnedIds.has(r.id)) r._pinned = true
         if (localityIds.has(r.id)) r._locality = true
+        if (strongRoutes.includes(row)) r._strongLine = true
         results.push(r)
       }
     }
@@ -1105,8 +1106,12 @@ export async function searchPlaces(
     ]
     const places = results.filter((r: any) => !r._locality)
     const addresses = fresh.filter((a) => a._peliasLayer !== 'postalcode')
+    // A leading digit reads as an address, but "4 train" names a line, and
+    // only an exact short name scores a strong route. Left among the places,
+    // the 4 came after a page of "4 Trainor Place"s and was sliced off.
+    const lines = places.filter((r: any) => r._strongLine)
     results = addressLike || streetLike
-      ? [...localities, ...addresses, ...places]
+      ? [...localities, ...lines, ...addresses, ...places.filter((r: any) => !r._strongLine)]
       : [...localities, ...places, ...addresses]
     results = results.slice(0, limit)
   }
@@ -1115,6 +1120,7 @@ export async function searchPlaces(
   for (const r of results) {
     delete (r as any)._pinned
     delete (r as any)._locality
+    delete (r as any)._strongLine
     delete (r as any)._peliasLayer
   }
 
