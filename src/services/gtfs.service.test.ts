@@ -1609,6 +1609,13 @@ describe('retryingTransitlandLimits', () => {
   })
 })
 
+describe('mixed line endings', () => {
+  test('reads a bare newline in a CRLF file as the end of a record', () => {
+    const trips = deriveStopRoutes('trip_id,route_id\r\nTrain848,R\nTrain849,R\r\n', 'trip_id,stop_id\r\nTrain849,s1\r\n', 'f')
+    expect(trips).toEqual([{ feedId: 'f', stopId: 's1', routeId: 'R' }])
+  })
+})
+
 describe('stray quotes', () => {
   test('reads a quote left undoubled inside a quoted field as text', () => {
     // RRTA's stops.txt: "Rt. 30 at King"s"

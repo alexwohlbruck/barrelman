@@ -699,10 +699,13 @@ async function alternateStaticUrls(
  * it the first column's key is "\ufefftrip_id", so every row reads as having
  * no trip_id. That made 122 US feeds look like timetables with no trips.
  * `relax_quotes` reads a stray quote mark inside an unquoted field (`NEGTL "`)
- * as text; strict parsing rejected the whole feed.
+ * as text; strict parsing rejected the whole feed. `record_delimiter` takes
+ * every line ending: csv-parse otherwise detects one from the first line, and
+ * MARC's one bare `\n` in a `\r\n` trips.txt merged two trips into one.
  */
 const GTFS_CSV = {
   bom: true,
+  record_delimiter: ['\r\n', '\n', '\r'],
   columns: true,
   skip_empty_lines: true,
   trim: true,
