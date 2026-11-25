@@ -3,8 +3,11 @@ FROM pgvector/pgvector:pg16
 # pgvector/pgvector:pg16 doesn't include PostGIS, and postgis/postgis doesn't
 # include pgvector — so we need a custom image that has both, plus osm2pgsql
 # for running imports and daily diffs, and Python for osm2pgsql-replication.
+# postgresql-16 is upgraded with PostGIS: pgdg builds PostGIS against its
+# newest 16.x, which can be ahead of the server in the base image.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+      postgresql-16 \
       postgresql-16-postgis-3 \
       postgresql-16-postgis-3-scripts \
       osm2pgsql \
