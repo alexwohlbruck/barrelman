@@ -28,6 +28,7 @@ const matchSchema = t.Object({
   provider: t.String(),
   providerPlaceId: t.Nullable(t.String()),
   confirmed: t.Boolean(),
+  label: t.Nullable(t.String({ description: "The listing's display name, when one is stored." })),
   updatedAt: t.String({ format: 'date-time' }),
 })
 
@@ -60,7 +61,7 @@ export function createPlaceMatchRoutes(deps: PlaceMatchDeps = defaultDeps, auth:
           summary: 'Get provider matches for a place',
           description: `The external listings (Google, Foursquare, …) this OSM element has been matched to.
 
-A \`providerPlaceId\` of \`null\` records that the place has no listing at that provider. \`confirmed\` marks a match a person chose; automatic matching leaves those alone. Matches are keyed by the OSM element and survive every OSM re-import.`,
+A \`providerPlaceId\` of \`null\` records that the place has no listing at that provider. \`confirmed\` marks a match a person chose; automatic matching leaves those alone. \`label\` is the listing's display name, kept for providers whose ids can't be looked up for free. Matches are keyed by the OSM element and survive every OSM re-import.`,
           tags: ['Places'],
         },
       },
@@ -75,7 +76,7 @@ A \`providerPlaceId\` of \`null\` records that the place has no listing at that 
         return deps.setProviderMatch(
           { osmType: params.osmType as OsmType, osmId: params.osmId },
           params.provider,
-          { providerPlaceId: body.providerPlaceId, confirmed: body.confirmed ?? false },
+          { providerPlaceId: body.providerPlaceId, confirmed: body.confirmed ?? false, label: body.label },
         )
       },
       {
@@ -83,6 +84,15 @@ A \`providerPlaceId\` of \`null\` records that the place has no listing at that 
         body: t.Object({
           providerPlaceId: t.Nullable(t.String({ minLength: 1, maxLength: 255 })),
           confirmed: t.Optional(t.Boolean({ default: false })),
+          label: t.Optional(
+            t.Nullable(
+              t.String({
+                maxLength: 300,
+                description:
+                  "The listing's display name, for providers whose ids can't be looked up for free (e.g. a Google Hotels property token). Omit to keep the stored name while the listing is unchanged; `null` clears it.",
+              }),
+            ),
+          ),
         }),
         detail: {
           summary: 'Set a provider match for a place',
