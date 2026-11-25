@@ -72,7 +72,7 @@ set -euo pipefail
 
 CONTAINER="barrelman-martin"
 DB_CONTAINER="${DB_CONTAINER:-barrelman-db}"
-PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/alexwohlbruck/planetiler-openmaptiles:v3.16-importance.2}"
+PLANETILER_IMAGE="${PLANETILER_IMAGE:-ghcr.io/alexwohlbruck/planetiler-openmaptiles:v3.16-importance.3}"
 BASEMAP_QRANK_URL="${BASEMAP_QRANK_URL-https://qrank.toolforge.org/download/qrank.csv.gz}"
 QRANK_NAME="sources/qrank.csv.gz"
 QRANK_MAX_AGE_DAYS=7
