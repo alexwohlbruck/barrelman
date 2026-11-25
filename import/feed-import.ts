@@ -129,7 +129,7 @@ export async function prepareFeedFile(filepath: string, feedInfo: GtfsFeedInfo) 
     required('stops.txt'), required('routes.txt'), required('trips.txt'), required('stop_times.txt'),
     readZipEntry(zip, 'agency.txt'), readZipEntry(zip, 'transfers.txt'), readZipEntry(zip, 'shapes.txt'),
   ])
-  const stops = parseStops(stopsContent, feedInfo.feedId)
+  const stops = uniqueStops(parseStops(stopsContent, feedInfo.feedId))
   const routes = parseRoutes(routesContent, feedInfo.feedId, agencyContent ? parseAgencies(agencyContent) : new Map())
   const trips = parseGtfsRecords(tripsContent)
   // Grouped by trip as it is read: a record per row of a large stop_times.txt
@@ -156,6 +156,14 @@ export async function prepareFeedFile(filepath: string, feedInfo: GtfsFeedInfo) 
   const bikesAllowed = deriveBikesAllowed(tripsContent)
 
   return { stops, routes, associations, patterns, transfers, shapes, routeShapes, bikesAllowed }
+}
+
+/** The first row for each stop_id: CatTran lists some of its stops twice. */
+export function uniqueStops<T extends { stopId: string }>(stops: T[]): T[] {
+  const seen = new Set<string>()
+  const kept = stops.filter(s => !seen.has(s.stopId) && seen.add(s.stopId))
+  if (kept.length < stops.length) console.warn(`  ! skipped ${stops.length - kept.length} repeated stop_id rows in stops.txt`)
+  return kept
 }
 
 /** Removes rows at stops the feed never defines, in place; returns how many. */

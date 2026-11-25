@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { dropUnknownStops, flatTransferTime, mergeTransfersTxt, type StationTime } from './feed-import'
+import { dropUnknownStops, uniqueStops, flatTransferTime, mergeTransfersTxt, type StationTime } from './feed-import'
 import { groupStopTimes } from '../src/services/gtfs.service'
 
 const HEADER = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time'
@@ -247,5 +247,12 @@ describe('dropUnknownStops', () => {
     expect(dropUnknownStops(times, new Set(['s1', 's2']))).toBe(2)
     expect(times.get('a')?.map(r => r.stopId)).toEqual(['s1', 's2'])
     expect(times.has('b')).toBe(false)
+  })
+})
+
+describe('uniqueStops', () => {
+  it('keeps the first row of a repeated stop_id', () => {
+    const stops = [{ stopId: 'TL-8', stopName: 'First' }, { stopId: 'TL-9', stopName: 'Other' }, { stopId: 'TL-8', stopName: 'Again' }]
+    expect(uniqueStops(stops).map(s => s.stopName)).toEqual(['First', 'Other'])
   })
 })
