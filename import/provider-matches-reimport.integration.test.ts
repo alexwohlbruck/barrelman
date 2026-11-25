@@ -62,13 +62,13 @@ describe.skipIf(!enabled)('provider matches across OSM re-imports', () => {
   const placeName = async (osmType: 'N' | 'W', osmId: number) =>
     (await sql`SELECT name FROM geo_places WHERE osm_type = ${osmType} AND osm_id = ${osmId}`)[0]?.name
   const matches = async () =>
-    (await sql`SELECT osm_type, osm_id::text, provider, provider_place_id, confirmed FROM place_provider_matches ORDER BY 1, 2, 3`)
+    (await sql`SELECT osm_type, osm_id::text, provider, provider_place_id, confirmed, label FROM place_provider_matches ORDER BY 1, 2, 3`)
       .map((r) => ({ ...r }))
 
   const expected = [
-    { osm_type: 'node', osm_id: '1001', provider: 'foursquare', provider_place_id: '4cd3fixture', confirmed: true },
-    { osm_type: 'node', osm_id: '1001', provider: 'opentable', provider_place_id: null, confirmed: true },
-    { osm_type: 'way', osm_id: '2001', provider: 'google', provider_place_id: 'ChIJfixture', confirmed: false },
+    { osm_type: 'node', osm_id: '1001', provider: 'foursquare', provider_place_id: '4cd3fixture', confirmed: true, label: null },
+    { osm_type: 'node', osm_id: '1001', provider: 'opentable', provider_place_id: null, confirmed: true, label: null },
+    { osm_type: 'way', osm_id: '2001', provider: 'google', provider_place_id: 'ChIJfixture', confirmed: false, label: 'Fixture Books' },
   ]
 
   beforeAll(async () => {
@@ -105,7 +105,7 @@ describe.skipIf(!enabled)('provider matches across OSM re-imports', () => {
     service = await import('../src/services/provider-matches.service')
     await service.setProviderMatch({ osmType: 'node', osmId: '1001' }, 'foursquare', { providerPlaceId: '4cd3fixture', confirmed: true })
     await service.setProviderMatch({ osmType: 'node', osmId: '1001' }, 'opentable', { providerPlaceId: null, confirmed: true })
-    await service.setProviderMatch({ osmType: 'way', osmId: '2001' }, 'google', { providerPlaceId: 'ChIJfixture', confirmed: false })
+    await service.setProviderMatch({ osmType: 'way', osmId: '2001' }, 'google', { providerPlaceId: 'ChIJfixture', confirmed: false, label: 'Fixture Books' })
   }, 600_000)
 
   afterAll(async () => {

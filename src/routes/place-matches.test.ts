@@ -32,7 +32,7 @@ function app() {
     getProviderMatches: async (place) =>
       [...stored.entries()].filter(([k]) => k.startsWith(`${place.osmType}/${place.osmId}/`)).map(([, m]) => m),
     setProviderMatch: async (place, provider, match) => {
-      const row = { provider, ...match, updatedAt: '2026-11-25T00:00:00.000Z' }
+      const row = { provider, ...match, label: match.label ?? null, updatedAt: '2026-11-25T00:00:00.000Z' }
       stored.set(key(place, provider), row)
       return row
     },
@@ -85,6 +85,24 @@ describe('place matches with a service key configured', () => {
     expect(stored.get('way/1/google')).toMatchObject({ providerPlaceId: null, confirmed: true })
   })
 
+  test('stores and returns a listing’s display name', async () => {
+    const { app: a } = app()
+    const put = await a.handle(
+      request('PUT', '/place/way/42/matches/google_hotels', { providerPlaceId: 'ChoIp8', confirmed: true, label: 'EVEN Hotel Brooklyn by IHG' }, SERVICE_KEY),
+    )
+    expect(put.status).toBe(200)
+    const res = await a.handle(request('GET', '/place/way/42/matches', undefined, SERVICE_KEY))
+    expect((await res.json()).matches[0]).toMatchObject({ providerPlaceId: 'ChoIp8', label: 'EVEN Hotel Brooklyn by IHG' })
+  })
+
+  test('rejects an over-long display name', async () => {
+    const { app: a } = app()
+    const res = await a.handle(
+      request('PUT', '/place/way/42/matches/google_hotels', { providerPlaceId: 'ChoIp8', label: 'x'.repeat(301) }, SERVICE_KEY),
+    )
+    expect(res.status).toBe(422)
+  })
+
   test('an unconfirmed write is the default', async () => {
     const { app: a, stored } = app()
     await a.handle(request('PUT', '/place/node/1/matches/google', { providerPlaceId: 'ChIJ' }, SERVICE_KEY))
@@ -100,7 +118,7 @@ describe('place matches with a service key configured', () => {
 
   test('a customer key reads matches but cannot change them', async () => {
     const { app: a, stored } = app()
-    stored.set('node/1/google', { provider: 'google', providerPlaceId: 'ChIJ', confirmed: false, updatedAt: '2026-11-25T00:00:00.000Z' })
+    stored.set('node/1/google', { provider: 'google', providerPlaceId: 'ChIJ', confirmed: false, label: null, updatedAt: '2026-11-25T00:00:00.000Z' })
     const get = await a.handle(request('GET', '/place/node/1/matches', undefined, LIVE_KEY))
     expect(get.status).toBe(200)
     const put = await a.handle(request('PUT', '/place/node/1/matches/google', { providerPlaceId: 'other' }, LIVE_KEY))
