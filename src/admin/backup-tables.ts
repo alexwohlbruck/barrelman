@@ -60,6 +60,10 @@ export const BACKUP_TABLES = [
   'import_regions',
   'osm_replication_state',
 
+  // Listings matched to OSM places. Each one cost a paid provider lookup or a
+  // person's correction, and no import brings them back.
+  'place_provider_matches',
+
   // Landmark placements and which release each source last imported.
   'landmark_models',
   'landmarks',
