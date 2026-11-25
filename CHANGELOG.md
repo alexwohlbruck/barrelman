@@ -12,6 +12,7 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ### Added
 
+* Places can store the listing they match at an external provider, such as a Google or Foursquare id, through `/place/{osmType}/{osmId}/matches`. Matches survive full and partial OSM re-imports and are included in backups. Only the service credential can write them.
 * The basemap names buildings that aren't otherwise a place, such as the halls of a school or college campus.
 
 ### Fixed
