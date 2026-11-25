@@ -10,6 +10,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+* The basemap names buildings that aren't otherwise a place, such as the halls of a school or college campus.
+
 ### Fixed
 
 * A transit feed that lists a stop twice imports with the first entry. The University of Arizona CatTran shuttle updates again.
