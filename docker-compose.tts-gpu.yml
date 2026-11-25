@@ -1,6 +1,6 @@
 services:
   tts:
-    image: ghcr.io/remsky/kokoro-fastapi-gpu:v0.9.0@sha256:9ba150465c6b8f5d6b1c62b54de83eb9aa0a1444aad8a1a9c8948eed60564b76
+    image: ghcr.io/remsky/kokoro-fastapi-gpu:v0.10.0@sha256:f027cfc59d7ae3cb283365248b3177c68d36bc5701c1385783a285262316687b
     deploy:
       resources:
         reservations:
