@@ -206,8 +206,7 @@ async function fetchAndInterpolate(
 
     for (const entity of feedMessage.entity) {
       const tu = entity.tripUpdate
-      if (!tu?.stopTimeUpdate?.length) continue
-      if (!tu.trip?.routeId) continue
+      if (!tu?.trip?.routeId) continue
 
       const result = placeTrain(tu, anchors.get(tu.trip.tripId ?? ''), stops, patterns, now)
       if (!result) continue

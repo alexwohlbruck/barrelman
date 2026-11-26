@@ -4,7 +4,7 @@
  */
 
 import { describe, it, test, expect } from 'bun:test'
-import { placeTrain, STALE_STOP_S, stopBefore, segmentSeconds } from './subway-position'
+import { placeTrain, STALE_STOP_S, TERMINAL_WINDOW_S, stopBefore, segmentSeconds } from './subway-position'
 
 // The 4, both ways, as trip patterns store them (parent station ids).
 const SOUTH = ['415', '416', '418', '419', '420', '423']
@@ -90,5 +90,18 @@ describe('placeTrain', () => {
 
   test('a train with no report, about to leave its first stop, waits there', () => {
     expect(place(trip(call('128S', 60), call('129S', 150)))).toEqual(at('128S'))
+  })
+
+  test('a train that has just reached its last stop stays there for a while', () => {
+    expect(place(trip(), { stopId: '130S', currentStatus: 1, timestamp: NOW - 30 })).toEqual(at('130S'))
+    expect(place(trip(), { stopId: '130S', currentStatus: 1, timestamp: NOW - 1 - TERMINAL_WINDOW_S })).toBeNull()
+  })
+
+  test('stops missing from the timetable are skipped', () => {
+    expect(place(trip(call('H19S', 30), call('128S', 60), call('129S', 150)))).toEqual(at('128S'))
+  })
+
+  test('a train stopped at a stop missing from the timetable is still placed', () => {
+    expect(place(trip(call('R60N', -10), call('128S', 60), call('129S', 150)), { stopId: 'R60N', currentStatus: 1, timestamp: NOW - 10 })).toEqual(at('128S'))
   })
 })

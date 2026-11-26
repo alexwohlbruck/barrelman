@@ -143,7 +143,10 @@ function anchorPosition(
 }
 
 
-/** A train with only future stops and no position report, due at its first stop within 2 minutes: waiting there to leave. */
+/** How long a train is shown at a terminal: before leaving its first stop, and after reaching its last. */
+export const TERMINAL_WINDOW_S = 120
+
+/** A train with only future stops and no position report, due at its first stop soon: waiting there to leave. */
 function terminalPosition(
   tripUpdate: any,
   stops: Map<string, StopPosition>,
@@ -151,7 +154,7 @@ function terminalPosition(
 ): InterpolationResult | null {
   const first = tripUpdate.stopTimeUpdate?.[0]
   const time = toSeconds(first?.arrival?.time ?? first?.departure?.time)
-  if (!(time > nowSec && time - nowSec < 120)) return null
+  if (!(time > nowSec && time - nowSec < TERMINAL_WINDOW_S)) return null
   const pos = stops.get(first.stopId)
   return pos ? { lat: pos.lat, lng: pos.lng, bearing: 0, speed: 0 } : null
 }
@@ -238,6 +241,19 @@ function leftFrom(tripUpdate: any, stopId: string, at: number): any {
  * interpolation, which places a train between stations; then the anchor,
  * for the many trips the pruned feed leaves no departed stop.
  */
+/** A trip with no stops left: the train has just reached its last one, or the trip is over. */
+function arrivedPosition(
+  tripUpdate: any,
+  vehicle: any,
+  stops: Map<string, StopPosition>,
+  patterns: Map<string, string[][]>,
+  nowSec: number,
+): InterpolationResult | null {
+  if (vehicle?.currentStatus !== STOPPED_AT) return null
+  if (nowSec - toSeconds(vehicle.timestamp) > TERMINAL_WINDOW_S) return null
+  return anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec)
+}
+
 export function placeTrain(
   tripUpdate: any,
   vehicle: any,
@@ -245,11 +261,15 @@ export function placeTrain(
   patterns: Map<string, string[][]>,
   nowSec: number,
 ): InterpolationResult | null {
+  // MTA uses some stop ids that aren't in the timetable, such as the Rockaway shuttle's H19.
+  tripUpdate = { ...tripUpdate, stopTimeUpdate: (tripUpdate.stopTimeUpdate ?? []).filter((s: any) => stops.has(s.stopId)) }
+  if (!tripUpdate.stopTimeUpdate.length) return arrivedPosition(tripUpdate, vehicle, stops, patterns, nowSec)
   if (vehicle?.currentStatus === STOPPED_AT) {
     const seen = toSeconds(vehicle.timestamp)
-    if (!(nowSec - seen > STALE_STOP_S)) return anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec)
-    const running = interpolateTrip(leftFrom(tripUpdate, vehicle.stopId, seen), stops, nowSec)
-    if (running) return running
+    const placed = nowSec - seen > STALE_STOP_S
+      ? interpolateTrip(leftFrom(tripUpdate, vehicle.stopId, seen), stops, nowSec)
+      : anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec)
+    if (placed) return placed
   }
   return interpolateTrip(tripUpdate, stops, nowSec) ??
     anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec) ??
