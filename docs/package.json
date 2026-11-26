@@ -13,7 +13,7 @@
     "fumadocs-core": "^15.8.5",
     "fumadocs-mdx": "^13.0.8",
     "fumadocs-openapi": "^8.1.12",
-    "fumadocs-ui": "^15.8.5",
+    "fumadocs-ui": "^16.18.1",
     "next": "^15.5.24",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
