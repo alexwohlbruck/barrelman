@@ -9,6 +9,7 @@ import { mapAssetRoutes } from './routes/map-assets'
 import { containsRoutes } from './routes/contains'
 import { childrenRoutes } from './routes/children'
 import { placeRoutes } from './routes/place'
+import { placeMatchRoutes } from './routes/place-matches'
 import { geocodeRoutes } from './routes/geocode'
 import { authRoutes } from './routes/auth'
 import { passkeyRoutes } from './routes/auth-passkeys'
@@ -41,6 +42,7 @@ import { startCacheBus } from './services/cache-bus.service'
 import { ensureOpsJobsSchema } from './services/ops-job-store'
 import { ensureRegionsSchema } from './services/region-store.service'
 import { ensureLandmarksSchema } from './services/landmarks.service'
+import { ensureProviderMatchesSchema } from './services/provider-matches.service'
 import { importLandmarks } from './services/landmark-import.service'
 import { initJobHistory } from './services/job-history.service'
 import { ensureSearchEnrichment } from './lib/search-enrichment'
@@ -100,6 +102,8 @@ await ensureOpsJobsSchema()
 await ensureRegionsSchema()
 // User accounts, API keys, usage and credits for the public API.
 await ensureAccountsSchema()
+// External listings matched to OSM places (Google, Foursquare), written by Parchment.
+await ensureProviderMatchesSchema()
 // Logs whether BARRELMAN_ADMIN_REQUIRE_PASSKEY is enforced, and warns when it
 // is set but no administrator has a passkey yet (it then waits; see the module).
 await passkeyPolicy.startupCheck()
@@ -180,6 +184,7 @@ const app = new Elysia()
   .use(containsRoutes)
   .use(childrenRoutes)
   .use(placeRoutes)
+  .use(placeMatchRoutes)
   .use(geocodeRoutes)
   .use(authRoutes)
   .use(passkeyRoutes)
