@@ -221,11 +221,22 @@ function interpolateTrip(
   return { lat, lng, bearing: brg, speed }
 }
 
+/** A stopped report this old means the train has left: MTA sends none on the long runs between express stops. */
+export const STALE_STOP_S = 60
+
+/** The update with `stopId` as the stop the train last left, at `at` when the feed has already pruned it. */
+function leftFrom(tripUpdate: any, stopId: string, at: number): any {
+  const stus = tripUpdate.stopTimeUpdate ?? []
+  if (stus.some((s: any) => s.stopId === stopId)) return tripUpdate
+  return { ...tripUpdate, stopTimeUpdate: [{ stopId, departure: { time: at } }, ...stus] }
+}
+
 /**
- * Where a train is. A train the feed says is stopped is at that platform: its
- * update predicts no dwell, so interpolating would pull it out early.
- * Otherwise interpolation, which places a train between stations; then the
- * anchor, for the many trips the pruned feed leaves no departed stop.
+ * Where a train is. A fresh stopped report puts it at that platform: its
+ * update predicts no dwell, so interpolating would pull it out early. A stale
+ * one means it has since left, so it runs on from there. Otherwise
+ * interpolation, which places a train between stations; then the anchor,
+ * for the many trips the pruned feed leaves no departed stop.
  */
 export function placeTrain(
   tripUpdate: any,
@@ -234,8 +245,13 @@ export function placeTrain(
   patterns: Map<string, string[][]>,
   nowSec: number,
 ): InterpolationResult | null {
-  return (vehicle?.currentStatus === STOPPED_AT ? anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec) : null) ??
-    interpolateTrip(tripUpdate, stops, nowSec) ??
+  if (vehicle?.currentStatus === STOPPED_AT) {
+    const seen = toSeconds(vehicle.timestamp)
+    if (!(nowSec - seen > STALE_STOP_S)) return anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec)
+    const running = interpolateTrip(leftFrom(tripUpdate, vehicle.stopId, seen), stops, nowSec)
+    if (running) return running
+  }
+  return interpolateTrip(tripUpdate, stops, nowSec) ??
     anchorPosition(vehicle, tripUpdate, stops, patterns, nowSec) ??
     terminalPosition(tripUpdate, stops, nowSec)
 }

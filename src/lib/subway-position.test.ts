@@ -4,7 +4,7 @@
  */
 
 import { describe, it, test, expect } from 'bun:test'
-import { placeTrain, stopBefore, segmentSeconds } from './subway-position'
+import { placeTrain, STALE_STOP_S, stopBefore, segmentSeconds } from './subway-position'
 
 // The 4, both ways, as trip patterns store them (parent station ids).
 const SOUTH = ['415', '416', '418', '419', '420', '423']
@@ -75,6 +75,12 @@ describe('placeTrain', () => {
 
   test('a stopped train whose stop was pruned is not moved on to the next one', () => {
     expect(place(trip(call('129S', 60), call('130S', 150)), { stopId: '128S', currentStatus: 1 })).toEqual(at('128S'))
+  })
+
+  test('a stale stopped report means the train has left that platform', () => {
+    const p = place(trip(call('129S', 45), call('130S', 135)), { stopId: '128S', currentStatus: 1, timestamp: NOW - 45 - STALE_STOP_S })!
+    expect(p.lat).toBeLessThan(at('128S').lat)
+    expect(p.lat).toBeGreaterThan(at('129S').lat)
   })
 
   test('a train under way is placed between the stations', () => {
