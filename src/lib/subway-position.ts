@@ -6,6 +6,9 @@
  * not take them with it.
  */
 
+/** The GTFS feed_id for NYC subway in our database. */
+export const SUBWAY_FEED_ID = '5'
+
 /** GTFS-RT timestamps arrive as numbers, longs, or {low, high} pairs. */
 export function toSeconds(ts: any): number {
   if (typeof ts === 'number') return ts

@@ -59,13 +59,14 @@ mock.module('gtfs-realtime-bindings', () => ({
 // Subway interpolation has its own path and keeps a module-level cache; stub it
 // so these vehicle-feed tests stay isolated from it regardless of run order
 // (another suite can otherwise leave the subway cache warm and skew counts).
+const mockSubway = mock(async (): Promise<any[]> => [])
 mock.module('./subway-interpolation.service', () => ({
-  getSubwayVehiclePositions: mock(async () => []),
+  getSubwayVehiclePositions: mockSubway,
 }))
 
 // ── Import under test ───────────────────────────────────────────────
 
-const { getVehiclePositions, getTripStopTimes } = await import('./vehicles.service')
+const { getVehiclePositions, getVehiclesForRoute, getTripStopTimes } = await import('./vehicles.service')
 
 // ── Test fixtures ───────────────────────────────────────────────────
 
@@ -247,6 +248,43 @@ describe('VehiclesService — getVehiclePositions', () => {
 
     // entity-3 has null position, should be skipped
     expect(result.vehicles.every(v => v.vehicleId !== '888_ghost')).toBe(true)
+  })
+})
+
+const SUBWAY_TRAIN = {
+  vehicleId: '5_subway_054550_A..S',
+  tripId: '5_054550_A..S',
+  routeId: 'A',
+  feedId: '5',
+  position: { lat: 40.757, lng: -73.989 },
+  bearing: 180,
+  speed: 0,
+  timestamp: '2026-11-26T14:00:00.000Z',
+}
+
+describe('VehiclesService — subway trains', () => {
+  beforeEach(() => {
+    mockDbExecute.mockReset()
+    mockDbExecute.mockImplementation(async () => [])
+    mockSubway.mockReset()
+    mockSubway.mockImplementation(async () => [SUBWAY_TRAIN])
+  })
+
+  test('a subway line has trains though the feed publishes no vehicle positions', async () => {
+    const result = await getVehiclesForRoute(['A'], '5')
+    expect(result.vehicles.map(v => v.vehicleId)).toEqual(['5_subway_054550_A..S'])
+  })
+
+  test('the subway viewport has trains filtered to the line asked for', async () => {
+    const box = { north: 40.8, south: 40.7, east: -73.9, west: -74.0 }
+    expect((await getVehiclePositions({ ...box, feedId: '5' })).vehicles).toHaveLength(1)
+    expect((await getVehiclePositions({ ...box, feedId: '5', routeId: 'E' })).vehicles).toEqual([])
+  })
+
+  test('another feed does not pay for the subway', async () => {
+    const result = await getVehiclesForRoute(['A'], '86')
+    expect(result.vehicles).toEqual([])
+    expect(mockSubway).not.toHaveBeenCalled()
   })
 })
 

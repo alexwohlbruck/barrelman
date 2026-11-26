@@ -28,8 +28,8 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import { LRUCache } from 'lru-cache'
-import type { TransitVehicle } from './vehicles.service'
-import { stopBefore, segmentSeconds, toSeconds } from '../lib/subway-position'
+import type { FetchFn, TransitVehicle } from './vehicles.service'
+import { SUBWAY_FEED_ID, stopBefore, segmentSeconds, toSeconds } from '../lib/subway-position'
 
 // Decode through the live import binding at call time rather than destructuring
 // at load, so a test mock of `gtfs-realtime-bindings` applies even when this
@@ -49,9 +49,6 @@ const SUBWAY_FEEDS = [
   { id: 'subway-nqrw', url: 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw' },
   { id: 'subway-sir', url: 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si' },
 ]
-
-/** The GTFS feed_id for NYC subway in our database. */
-const SUBWAY_FEED_ID = '5'
 
 // ── Stop position cache ────────────────────────────────────────
 
@@ -158,7 +155,7 @@ function bearing(lat1: number, lng1: number, lat2: number, lng2: number): number
  */
 export async function getSubwayVehiclePositions(
   bounds?: { north: number; south: number; east: number; west: number },
-  fetchFn: typeof fetch = globalThis.fetch,
+  fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
   const cacheKey = 'all'
   const cached = subwayCache.get(cacheKey)
@@ -207,7 +204,7 @@ async function fetchAndInterpolate(
   stops: Map<string, StopPosition>,
   patterns: Map<string, string[][]>,
   nowSec: number,
-  fetchFn: typeof fetch = globalThis.fetch,
+  fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
   try {
     const response = await fetchFn(feed.url, {
