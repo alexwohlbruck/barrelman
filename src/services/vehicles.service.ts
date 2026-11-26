@@ -17,6 +17,7 @@ import type { RtUrlEntry } from '../schema/gtfs'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import JSZip from 'jszip'
+import { SUBWAY_FEED_ID } from '../lib/subway-position'
 
 // Decode through the live import binding at call time rather than destructuring
 // at load, so a test mock of `gtfs-realtime-bindings` applies even when this
@@ -238,11 +239,7 @@ export async function getVehiclePositions(
 ): Promise<VehiclePositionsResponse> {
   const { north, south, east, west, feedId, routeId } = request
 
-  // Get feeds with vehicle position RT URLs
   const feeds = await getFeedsWithVehiclePositions(feedId)
-  if (feeds.length === 0) {
-    return { vehicles: [], feedTimestamps: {} }
-  }
 
   // Fetch all feeds in parallel
   const results = await Promise.allSettled(
@@ -271,14 +268,8 @@ export async function getVehiclePositions(
     }
   }
 
-  // Add interpolated subway positions from TripUpdate feeds
-  try {
-    const { getSubwayVehiclePositions } = await import('./subway-interpolation.service')
-    const subwayVehicles = await getSubwayVehiclePositions({ north, south, east, west }, fetchFn)
-    allVehicles.push(...subwayVehicles)
-  } catch (err) {
-    console.warn('[Vehicles] Subway interpolation failed:', err instanceof Error ? err.message : err)
-  }
+  const subway = await subwayVehicles(feedId, { north, south, east, west }, fetchFn)
+  allVehicles.push(...(routeId ? subway.filter(v => v.routeId === routeId) : subway))
 
   // Resolve routeId from tripId for feeds that don't include it
   await resolveMissingRoutes(allVehicles)
@@ -302,7 +293,6 @@ export async function getVehiclesForRoute(
   fetchFn: FetchFn = globalThis.fetch,
 ): Promise<VehiclePositionsResponse> {
   const feeds = await getFeedsWithVehiclePositions(feedId)
-  if (feeds.length === 0) return { vehicles: [], feedTimestamps: {} }
 
   const results = await Promise.allSettled(
     feeds.map(feed => fetchFeedVehicles(feed, fetchFn)),
@@ -318,14 +308,7 @@ export async function getVehiclesForRoute(
     allVehicles.push(...vehicles)
   }
 
-  // Add subway interpolated positions (no bounds filter)
-  try {
-    const { getSubwayVehiclePositions } = await import('./subway-interpolation.service')
-    const subwayVehicles = await getSubwayVehiclePositions(undefined, fetchFn)
-    allVehicles.push(...subwayVehicles)
-  } catch (err) {
-    console.warn('[Vehicles] Subway interpolation failed:', err instanceof Error ? err.message : err)
-  }
+  allVehicles.push(...await subwayVehicles(feedId, undefined, fetchFn))
 
   await resolveMissingRoutes(allVehicles)
   await enrichWithRouteInfo(allVehicles)
@@ -339,6 +322,25 @@ export async function getVehiclesForRoute(
   )
 
   return { vehicles: filtered, feedTimestamps }
+}
+
+/**
+ * Positions placed from the subway's TripUpdates. The subway publishes no
+ * VehiclePositions feed, so it never shows up in the feed list above.
+ */
+async function subwayVehicles(
+  feedId: string | undefined,
+  bounds: { north: number; south: number; east: number; west: number } | undefined,
+  fetchFn: FetchFn,
+): Promise<TransitVehicle[]> {
+  if (feedId && feedId !== SUBWAY_FEED_ID) return []
+  try {
+    const { getSubwayVehiclePositions } = await import('./subway-interpolation.service')
+    return await getSubwayVehiclePositions(bounds, fetchFn)
+  } catch (err) {
+    console.warn('[Vehicles] Subway interpolation failed:', err instanceof Error ? err.message : err)
+    return []
+  }
 }
 
 // ── Feed discovery ──────────────────────────────────────────────────

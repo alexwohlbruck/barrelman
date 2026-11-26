@@ -28,8 +28,8 @@ import { db } from '../db'
 import { sql } from 'drizzle-orm'
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings'
 import { LRUCache } from 'lru-cache'
-import type { TransitVehicle } from './vehicles.service'
-import { stopBefore, segmentSeconds, toSeconds } from '../lib/subway-position'
+import type { FetchFn, TransitVehicle } from './vehicles.service'
+import { SUBWAY_FEED_ID, placeTrain, toSeconds, type StopPosition } from '../lib/subway-position'
 
 // Decode through the live import binding at call time rather than destructuring
 // at load, so a test mock of `gtfs-realtime-bindings` applies even when this
@@ -50,19 +50,7 @@ const SUBWAY_FEEDS = [
   { id: 'subway-sir', url: 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si' },
 ]
 
-/** The GTFS feed_id for NYC subway in our database. */
-const SUBWAY_FEED_ID = '5'
-
 // ── Stop position cache ────────────────────────────────────────
-
-interface StopPosition {
-  lat: number
-  lng: number
-  name: string
-}
-
-/** GTFS-RT names platforms ("239S"); trip patterns name stations ("239"). */
-const parentOf = (stopId: string) => stopId.replace(/[NS]$/, '')
 
 let stopPositions: Map<string, StopPosition> | null = null
 
@@ -135,20 +123,6 @@ const subwayCache = new LRUCache<string, CachedSubwayFeed>({
   ttl: 15_000, // 15 seconds — subway feeds update ~every 30s
 })
 
-
-// ── Bearing calculation ────────────────────────────────────────
-
-function bearing(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const toRad = (d: number) => (d * Math.PI) / 180
-  const toDeg = (r: number) => (r * 180) / Math.PI
-  const dLng = toRad(lng2 - lng1)
-  const y = Math.sin(dLng) * Math.cos(toRad(lat2))
-  const x =
-    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
-    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLng)
-  return (toDeg(Math.atan2(y, x)) + 360) % 360
-}
-
 // ── Main export ────────────────────────────────────────────────
 
 /**
@@ -158,7 +132,7 @@ function bearing(lat1: number, lng1: number, lat2: number, lng2: number): number
  */
 export async function getSubwayVehiclePositions(
   bounds?: { north: number; south: number; east: number; west: number },
-  fetchFn: typeof fetch = globalThis.fetch,
+  fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
   const cacheKey = 'all'
   const cached = subwayCache.get(cacheKey)
@@ -207,7 +181,7 @@ async function fetchAndInterpolate(
   stops: Map<string, StopPosition>,
   patterns: Map<string, string[][]>,
   nowSec: number,
-  fetchFn: typeof fetch = globalThis.fetch,
+  fetchFn: FetchFn = globalThis.fetch,
 ): Promise<TransitVehicle[]> {
   try {
     const response = await fetchFn(feed.url, {
@@ -232,15 +206,9 @@ async function fetchAndInterpolate(
 
     for (const entity of feedMessage.entity) {
       const tu = entity.tripUpdate
-      if (!tu?.stopTimeUpdate?.length) continue
-      if (!tu.trip?.routeId) continue
+      if (!tu?.trip?.routeId) continue
 
-      // Interpolation first — it places a train BETWEEN stations, which is
-      // where one usually is. The anchor catches the majority the pruned
-      // feed leaves it unable to answer for.
-      const result =
-        interpolateTrip(tu, stops, now) ??
-        anchorPosition(anchors.get(tu.trip.tripId ?? ''), tu, stops, patterns, now)
+      const result = placeTrain(tu, anchors.get(tu.trip.tripId ?? ''), stops, patterns, now)
       if (!result) continue
 
       // Build a unique vehicle ID from the trip
@@ -267,160 +235,4 @@ async function fetchAndInterpolate(
     )
     return []
   }
-}
-
-interface InterpolationResult {
-  lat: number
-  lng: number
-  bearing: number
-  speed: number
-}
-
-/** GTFS-RT VehicleStopStatus. */
-const STOPPED_AT = 1
-
-/**
- * Place a train from its VehiclePosition entity.
- *
- * The entity names one stop and the train's relationship to it. Stopped at
- * it means exactly there. Approaching it means somewhere on the run in
- * from the station before — which the route's stop order supplies, and the
- * remaining time to arrival places it along.
- */
-function anchorPosition(
-  vehicle: any,
-  tripUpdate: any,
-  stops: Map<string, StopPosition>,
-  patterns: Map<string, string[][]>,
-  nowSec: number,
-): InterpolationResult | null {
-  if (!vehicle?.stopId) return null
-  const target = stops.get(vehicle.stopId)
-  if (!target) return null
-
-  const stus = tripUpdate.stopTimeUpdate ?? []
-  const nextAfter = stus.find((s: any) => s.stopId && s.stopId !== vehicle.stopId)
-  const bearingTo = (to: StopPosition | undefined) =>
-    to ? bearing(target.lat, target.lng, to.lat, to.lng) : 0
-
-  const at = (): InterpolationResult => ({
-    lat: target.lat,
-    lng: target.lng,
-    bearing: bearingTo(nextAfter ? stops.get(nextAfter.stopId) : undefined),
-    speed: 0,
-  })
-
-  if (vehicle.currentStatus === STOPPED_AT) return at()
-
-  const routeId = tripUpdate.trip?.routeId
-  const prevId = routeId
-    ? stopBefore(
-        patterns.get(routeId) ?? [],
-        parentOf(vehicle.stopId),
-        nextAfter ? parentOf(nextAfter.stopId) : null,
-      )
-    : null
-  const prev = prevId ? stops.get(prevId) : undefined
-  if (!prev) return at()
-
-  // How far along the run in: the arrival still to come, against a typical
-  // hop for this trip. Without an arrival time, halfway is the honest
-  // answer — the train is between the two, and nothing says where.
-  const arrive = toSeconds(
-    stus.find((s: any) => s.stopId === vehicle.stopId)?.arrival?.time,
-  )
-  const hop = segmentSeconds(stus) ?? 90
-  const remaining = arrive ? Math.max(0, arrive - nowSec) : hop / 2
-  const t = Math.max(0, Math.min(1, 1 - remaining / hop))
-
-  return {
-    lat: prev.lat + (target.lat - prev.lat) * t,
-    lng: prev.lng + (target.lng - prev.lng) * t,
-    bearing: bearing(prev.lat, prev.lng, target.lat, target.lng),
-    speed: 0,
-  }
-}
-
-
-function interpolateTrip(
-  tripUpdate: any,
-  stops: Map<string, StopPosition>,
-  nowSec: number,
-): InterpolationResult | null {
-  const stus = tripUpdate.stopTimeUpdate
-  if (!stus || stus.length < 2) return null
-
-  // Find the two bracketing stops: last departed and next arriving.
-  // Walk the stop list to find where `now` falls.
-  let lastStop: { id: string; time: number } | null = null
-  let nextStop: { id: string; time: number } | null = null
-
-  for (let i = 0; i < stus.length; i++) {
-    const stu = stus[i]
-    const depTime = stu.departure?.time ? toSeconds(stu.departure.time) : null
-    const arrTime = stu.arrival?.time ? toSeconds(stu.arrival.time) : null
-
-    // Use departure time for "last stop" and arrival time for "next stop"
-    if (depTime && depTime <= nowSec) {
-      lastStop = { id: stu.stopId, time: depTime }
-    }
-    if (arrTime && arrTime > nowSec && !nextStop) {
-      nextStop = { id: stu.stopId, time: arrTime }
-    }
-  }
-
-  // If we only have future stops, the train hasn't departed yet — show at first stop
-  if (!lastStop && stus.length > 0) {
-    const firstStu = stus[0]
-    const firstTime = firstStu.arrival?.time
-      ? toSeconds(firstStu.arrival.time)
-      : firstStu.departure?.time
-        ? toSeconds(firstStu.departure.time)
-        : null
-    if (firstTime && firstTime > nowSec && firstTime - nowSec < 120) {
-      // Within 2 minutes of departure — show at the first stop
-      const pos = stops.get(firstStu.stopId)
-      if (pos) {
-        return { lat: pos.lat, lng: pos.lng, bearing: 0, speed: 0 }
-      }
-    }
-    return null
-  }
-
-  if (!lastStop || !nextStop) return null
-
-  const lastPos = stops.get(lastStop.id)
-  const nextPos = stops.get(nextStop.id)
-  if (!lastPos || !nextPos) return null
-
-  // Compute interpolation fraction
-  const totalTime = nextStop.time - lastStop.time
-  if (totalTime <= 0) return null
-
-  const elapsed = nowSec - lastStop.time
-  const t = Math.max(0, Math.min(1, elapsed / totalTime))
-
-  // Linear interpolation between stops
-  const lat = lastPos.lat + (nextPos.lat - lastPos.lat) * t
-  const lng = lastPos.lng + (nextPos.lng - lastPos.lng) * t
-
-  // Bearing from last stop to next stop
-  const brg = bearing(lastPos.lat, lastPos.lng, nextPos.lat, nextPos.lng)
-
-  // Approximate speed from distance and time
-  const distM =
-    6_371_000 *
-    Math.acos(
-      Math.min(
-        1,
-        Math.sin((lastPos.lat * Math.PI) / 180) *
-          Math.sin((nextPos.lat * Math.PI) / 180) +
-          Math.cos((lastPos.lat * Math.PI) / 180) *
-            Math.cos((nextPos.lat * Math.PI) / 180) *
-            Math.cos(((nextPos.lng - lastPos.lng) * Math.PI) / 180),
-      ),
-    )
-  const speed = totalTime > 0 ? distM / totalTime : 0
-
-  return { lat, lng, bearing: brg, speed }
 }
