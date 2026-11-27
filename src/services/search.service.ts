@@ -440,6 +440,7 @@ export async function searchPlaces(
       'railway/funicular', 'railway/disused', 'railway/abandoned',
       'railway/construction') THEN 0.3
     WHEN categories[1] LIKE 'man_made/surveillance%' THEN 0.2
+    WHEN tags->>'type' = 'route' THEN 0.9
     ELSE 1.0
   END`
 
