@@ -21,6 +21,10 @@ does it — and the release pipeline turns it into the GitHub Release notes.
 * A transit feed whose files mix Windows and Unix line endings keeps every trip. MARC lost a train and stopped updating.
 * Transit feeds with a few broken timetable rows import instead of being skipped: rows at flex zones or undefined stops are left out, padded stop ids are trimmed, and stray quotes in names are read as text. Ten US feeds, including Owensboro, Red Rose Transit and Orleans Express, update again.
 * A place named exactly what you typed now ranks above a spelling correction of that word. "dimes square" finds the restaurant Dimes on Canal St instead of only Times Square.
+* Search scores every match by distance before trimming the list, so a large park or a nearby station is no longer dropped for weaker matches found first. Typing "Central Park" in Midtown suggests the park.
+* A place whose alternative name is exactly what you typed ranks like an exact name. "Penn Station" in Midtown finds the 34th Street–Penn Station subway station instead of a platform in New Jersey.
+* A one-word name like "Starbucks" no longer puts far-away places that list it as an alternative name above the nearby matches.
+* A cycling or bus route named after a place ranks below the place itself, so "Central Park" leads with the park.
 
 ## [0.10.66] - 2026-11-24
 
