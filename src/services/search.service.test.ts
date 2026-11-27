@@ -1120,6 +1120,26 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     expect(results.map((r: any) => r.id)).toContain('way/2')
   })
 
+  test('a nearby alt_name match outranks a far exact name once text matches fill the limit', async () => {
+    // "penn station" in Midtown: the subway station is alt_name=Penn Station,
+    // and a platform 15 km away is named exactly that.
+    const subway = { id: 'node/5111472122', name: '34th Street–Penn Station', distance_m: 641 }
+    const platform = { id: 'node/12188143718', name: 'Penn Station', text_rank: 1.65, distance_m: 15_415 }
+    const artwork = Array.from({ length: 5 }, (_, i) => (
+      { id: `node/${i + 1}`, name: 'Penn Station Eagle', text_rank: 1.03, distance_m: 900 }))
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('codes @>')) return [{ ...subway, text_rank: 1.65 }]
+      if (text.includes('FROM geo_places') && text.includes('ts @@')) {
+        return [platform, ...artwork, { ...subway, text_rank: 0.7 }]
+      }
+      return []
+    })
+    const results = await searchPlaces({ query: 'penn station', lat: 40.7549, lng: -73.984, limit: 5 })
+    expect(results[0].id).toBe('node/5111472122')
+    expect(results[0].text_rank).toBe(1.65)
+  })
+
   test('a code-shaped query is still pinned regardless of distance', async () => {
     const airport = { id: 'way/1', name: 'John F. Kennedy International Airport', text_rank: 0.98, distance_m: 900_000 }
     const cafe = { id: 'node/2', name: 'JFK Cafe', text_rank: 1.5, distance_m: 100 }

@@ -163,6 +163,10 @@ const CORRECTED_RANK = 0.8
  *  corrections: 1.5 × this, against at most 1.5 × CORRECTED_RANK. */
 const NAMED_RANK = 0.9
 
+/** What the FTS layer scores a name equal to the query (1.5 × the 1.1 exact
+ *  boost). An alt_name or ref equal to a multi-word query is as exact. */
+const EXACT_NAME_RANK = 1.65
+
 /** Pelias budget for typeahead that doesn't look like an address. Healthy
  *  answers measured 15ms at the median and 67ms at p90. */
 const AUTOCOMPLETE_ADDRESS_BUDGET_MS = 400
@@ -685,7 +689,7 @@ export async function searchPlaces(
             id, osm_type, osm_id, name, name_abbrev, categories, tags,
             address, hours, phones, websites, geom_type,
             ST_AsGeoJSON(centroid)::jsonb AS geometry,
-            0.98::float AS text_rank
+            ${codeShaped ? sql`0.98::float` : sql`(${EXACT_NAME_RANK} * ${categoryDemotion})`} AS text_rank
             ${distanceSelect}
           FROM geo_places
           WHERE codes @> ARRAY[${lowerQuery}]
@@ -932,8 +936,8 @@ export async function searchPlaces(
     }
 
     // Merge, deduplicating in priority order: exact-name localities > codes >
-    // other localities > short-name transit routes > abbreviation > FTS >
-    // name-shaped codes > corrected FTS > other transit routes > trigram >
+    // other localities > short-name transit routes > name-shaped codes >
+    // abbreviation > FTS > corrected FTS > other transit routes > trigram >
     // transit stops. Transit ids can't
     // collide with OSM ids, so their position only decides who survives the cap.
     // Codes and locality hits are pinned — exempt from proximity re-ranking. An
@@ -958,7 +962,7 @@ export async function searchPlaces(
     const strongRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) >= STRONG_ROUTE_RANK)
     const weakRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) < STRONG_ROUTE_RANK)
     results = []
-    for (const row of [...exactLocalities, ...pinnedCodes, ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...nameCodes, ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
+    for (const row of [...exactLocalities, ...pinnedCodes, ...(localityRows as any[]), ...strongRoutes, ...nameCodes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
