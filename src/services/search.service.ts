@@ -671,14 +671,11 @@ export async function searchPlaces(
       ? sql`ORDER BY centroid <-> ${locationPoint} ASC`
       : sql`ORDER BY name ASC`
 
-    // The codes column also carries ref and alt_name, so a query with a space
-    // in it matches names, not codes: "central park" matched a shoe store in
-    // Virginia (ref=Central Park) and a park in Garland, Texas
-    // (alt_name=Central Park), and pinned all eleven such rows above Central
-    // Park itself. Only a code-shaped query is definitive enough to pin
-    // regardless of distance; a name-shaped one ranks with the text matches,
-    // nearest first.
-    const codeShaped = !/\s/.test(sanitizedQuery)
+    // The codes column also carries ref and alt_name, so it matches names as
+    // well as codes. Only a code-shaped query (one short word, or one with a
+    // digit: "jfk", "m15") is definitive enough to pin regardless of distance;
+    // a name ranks with the text matches, as exact as a name equal to it.
+    const codeShaped = !/\s/.test(sanitizedQuery) && (sanitizedQuery.length <= 5 || /\d/.test(sanitizedQuery))
     const codesOrder = codeShaped || !hasPointLocation
       ? sql`ORDER BY (geom_type = 'line') ASC, area_m2 DESC NULLS LAST`
       : sql`ORDER BY centroid <-> ${locationPoint} ASC`

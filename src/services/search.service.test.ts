@@ -1140,6 +1140,18 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     expect(results[0].text_rank).toBe(1.65)
   })
 
+  test('a long single word matched by alt_name is not pinned', async () => {
+    const farCafe = { id: 'node/1', name: 'The Bean Scene', text_rank: 1.65, distance_m: 620_000 }
+    const starbucks = { id: 'node/2', name: 'Starbucks', text_rank: 1.65, distance_m: 100 }
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('codes @>')) return [farCafe]
+      return text.includes('ts @@') ? [starbucks] : []
+    })
+    const results = await searchPlaces({ query: 'starbucks', lat: 40.7549, lng: -73.984, limit: 5 })
+    expect(results[0].id).toBe('node/2')
+  })
+
   test('a code-shaped query is still pinned regardless of distance', async () => {
     const airport = { id: 'way/1', name: 'John F. Kennedy International Airport', text_rank: 0.98, distance_m: 900_000 }
     const cafe = { id: 'node/2', name: 'JFK Cafe', text_rank: 1.5, distance_m: 100 }
