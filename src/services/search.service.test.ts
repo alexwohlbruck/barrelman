@@ -1060,6 +1060,19 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     expect(results[0].id).toBe('way/427818536')
   })
 
+  test('a large area still leads when the probe fills the typeahead pool', async () => {
+    setLargeAreaIndexReady(true)
+    const crowd = Array.from({ length: 200 }, (_, i) => (
+      { id: `node/${i + 1}`, name: `Central Park West ${i + 1}`, text_rank: 1.08, distance_m: 300 }))
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('area_m2 >= 100000')) return [park]
+      return text.includes('ORDER BY centroid <->') && text.includes('LIMIT') ? crowd : []
+    })
+    const results = await searchPlaces({ query: 'central park', lat: 40.7649, lng: -73.98, autocomplete: true, limit: 10 })
+    expect(results[0].id).toBe('way/427818536')
+  })
+
   test('the large-area stage waits for three letters of the last word', async () => {
     // "pa:*" matches ~50K large areas nationally and names none of them yet.
     setLargeAreaIndexReady(true)
@@ -1105,6 +1118,38 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     const results = await searchPlaces({ query: 'prospect prak', lat: 40.7649, lng: -73.98, autocomplete: true, limit: 10 })
     expect(results.map((r: any) => r.id)).toContain('relation/1')
     expect(results.map((r: any) => r.id)).toContain('way/2')
+  })
+
+  test('a nearby alt_name match outranks a far exact name once text matches fill the limit', async () => {
+    // "penn station" in Midtown: the subway station is alt_name=Penn Station,
+    // and a platform 15 km away is named exactly that.
+    const subway = { id: 'node/5111472122', name: '34th Street–Penn Station', distance_m: 641 }
+    const platform = { id: 'node/12188143718', name: 'Penn Station', text_rank: 1.65, distance_m: 15_415 }
+    const artwork = Array.from({ length: 5 }, (_, i) => (
+      { id: `node/${i + 1}`, name: 'Penn Station Eagle', text_rank: 1.03, distance_m: 900 }))
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('codes @>')) return [{ ...subway, text_rank: 1.65 }]
+      if (text.includes('FROM geo_places') && text.includes('ts @@')) {
+        return [platform, ...artwork, { ...subway, text_rank: 0.7 }]
+      }
+      return []
+    })
+    const results = await searchPlaces({ query: 'penn station', lat: 40.7549, lng: -73.984, limit: 5 })
+    expect(results[0].id).toBe('node/5111472122')
+    expect(results[0].text_rank).toBe(1.65)
+  })
+
+  test('a long single word matched by alt_name is not pinned', async () => {
+    const farCafe = { id: 'node/1', name: 'The Bean Scene', text_rank: 1.65, distance_m: 620_000 }
+    const starbucks = { id: 'node/2', name: 'Starbucks', text_rank: 1.65, distance_m: 100 }
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('codes @>')) return [farCafe]
+      return text.includes('ts @@') ? [starbucks] : []
+    })
+    const results = await searchPlaces({ query: 'starbucks', lat: 40.7549, lng: -73.984, limit: 5 })
+    expect(results[0].id).toBe('node/2')
   })
 
   test('a code-shaped query is still pinned regardless of distance', async () => {

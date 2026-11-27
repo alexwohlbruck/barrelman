@@ -163,6 +163,10 @@ const CORRECTED_RANK = 0.8
  *  corrections: 1.5 × this, against at most 1.5 × CORRECTED_RANK. */
 const NAMED_RANK = 0.9
 
+/** What the FTS layer scores a name equal to the query (1.5 × the 1.1 exact
+ *  boost). An alt_name or ref equal to a multi-word query is as exact. */
+const EXACT_NAME_RANK = 1.65
+
 /** Pelias budget for typeahead that doesn't look like an address. Healthy
  *  answers measured 15ms at the median and 67ms at p90. */
 const AUTOCOMPLETE_ADDRESS_BUDGET_MS = 400
@@ -436,6 +440,7 @@ export async function searchPlaces(
       'railway/funicular', 'railway/disused', 'railway/abandoned',
       'railway/construction') THEN 0.3
     WHEN categories[1] LIKE 'man_made/surveillance%' THEN 0.2
+    WHEN tags->>'type' = 'route' THEN 0.9
     ELSE 1.0
   END`
 
@@ -667,14 +672,11 @@ export async function searchPlaces(
       ? sql`ORDER BY centroid <-> ${locationPoint} ASC`
       : sql`ORDER BY name ASC`
 
-    // The codes column also carries ref and alt_name, so a query with a space
-    // in it matches names, not codes: "central park" matched a shoe store in
-    // Virginia (ref=Central Park) and a park in Garland, Texas
-    // (alt_name=Central Park), and pinned all eleven such rows above Central
-    // Park itself. Only a code-shaped query is definitive enough to pin
-    // regardless of distance; a name-shaped one ranks with the text matches,
-    // nearest first.
-    const codeShaped = !/\s/.test(sanitizedQuery)
+    // The codes column also carries ref and alt_name, so it matches names as
+    // well as codes. Only a code-shaped query (one short word, or one with a
+    // digit: "jfk", "m15") is definitive enough to pin regardless of distance;
+    // a name ranks with the text matches, as exact as a name equal to it.
+    const codeShaped = !/\s/.test(sanitizedQuery) && (sanitizedQuery.length <= 5 || /\d/.test(sanitizedQuery))
     const codesOrder = codeShaped || !hasPointLocation
       ? sql`ORDER BY (geom_type = 'line') ASC, area_m2 DESC NULLS LAST`
       : sql`ORDER BY centroid <-> ${locationPoint} ASC`
@@ -685,7 +687,7 @@ export async function searchPlaces(
             id, osm_type, osm_id, name, name_abbrev, categories, tags,
             address, hours, phones, websites, geom_type,
             ST_AsGeoJSON(centroid)::jsonb AS geometry,
-            0.98::float AS text_rank
+            ${codeShaped ? sql`0.98::float` : sql`(${EXACT_NAME_RANK} * ${categoryDemotion})`} AS text_rank
             ${distanceSelect}
           FROM geo_places
           WHERE codes @> ARRAY[${lowerQuery}]
@@ -932,8 +934,8 @@ export async function searchPlaces(
     }
 
     // Merge, deduplicating in priority order: exact-name localities > codes >
-    // other localities > short-name transit routes > abbreviation > FTS >
-    // name-shaped codes > corrected FTS > other transit routes > trigram >
+    // other localities > short-name transit routes > name-shaped codes >
+    // abbreviation > FTS > corrected FTS > other transit routes > trigram >
     // transit stops. Transit ids can't
     // collide with OSM ids, so their position only decides who survives the cap.
     // Codes and locality hits are pinned — exempt from proximity re-ranking. An
@@ -958,7 +960,7 @@ export async function searchPlaces(
     const strongRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) >= STRONG_ROUTE_RANK)
     const weakRoutes = (transitRouteRows as any[]).filter((r: any) => (r.text_rank ?? 0) < STRONG_ROUTE_RANK)
     results = []
-    for (const row of [...exactLocalities, ...pinnedCodes, ...(localityRows as any[]), ...strongRoutes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...nameCodes, ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
+    for (const row of [...exactLocalities, ...pinnedCodes, ...(localityRows as any[]), ...strongRoutes, ...nameCodes, ...(nameAbbrevRows as any[]), ...(ftsRows as any[]), ...correctedRows, ...weakRoutes, ...(trigramRows as any[]), ...(transitStopRows as any[])]) {
       const r = row as any
       if (!seen.has(r.id)) {
         seen.add(r.id)
@@ -974,10 +976,9 @@ export async function searchPlaces(
     if ((transitRouteRows as any[]).length || (transitStopRows as any[]).length) {
       results = reconcileTransitHits(results)
     }
-    // The autocomplete pool is deliberately wider than `limit` — it is trimmed
-    // after the proximity re-rank below, not before, so the re-rank gets to see
-    // the whole candidate set. Every other mode is capped here as before.
-    results = results.slice(0, localAutocomplete ? AUTOCOMPLETE_POOL : limit)
+    // With a location, every candidate goes to the proximity re-rank, which
+    // trims to `limit` after scoring. Capping here would cut by layer order.
+    if (!hasRoute && !hasPointLocation) results = results.slice(0, limit)
 
     // Layer 4: Semantic search
     if (!autocomplete && (semantic || results.length < Math.min(5, limit))) {

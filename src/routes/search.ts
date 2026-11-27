@@ -92,7 +92,9 @@ export function createSearchRoutes(deps = { searchPlaces: _searchPlaces }) {
 3. Abbreviation match on pre-computed \`name_abbrev\`
 4. Semantic vector search via \`pgvector\` (conditional)
 
-Results are deduplicated in priority order (FTS > abbreviation > trigram > semantic) then re-ranked with proximity decay when coordinates are provided.
+Results are deduplicated in priority order (FTS > abbreviation > trigram > semantic) then re-ranked with proximity decay when coordinates are provided. Every candidate is scored before the response is cut to \`limit\`.
+
+**Codes**: A short code (\`jfk\`, \`KCLT\`) or one with a digit (\`m15\`) matching a place's \`iata\`, \`icao\`, \`ref\` or similar tag is pinned to the top. A longer query that equals a place's \`alt_name\`, \`short_name\` or \`ref\` ranks as an exact name match, nearest first.
 
 **Places**: Countries, states, counties, cities, neighbourhoods and postal codes are matched by a dedicated layer and pinned to the top, ahead of the proximity re-rank — a city 800 km away still leads a search for its name. Their own distance weighting scales with the size of the place. A place mapped as both a label node and a boundary is returned once, as the boundary. A postal-code-shaped query (\`11211\`, \`SW1A 1AA\`) also matches postal codes from the geocoder, returned with the category \`pelias/postalcode\`.
 
