@@ -1060,6 +1060,19 @@ describe('searchPlaces — "central park" typed in Midtown', () => {
     expect(results[0].id).toBe('way/427818536')
   })
 
+  test('a large area still leads when the probe fills the typeahead pool', async () => {
+    setLargeAreaIndexReady(true)
+    const crowd = Array.from({ length: 200 }, (_, i) => (
+      { id: `node/${i + 1}`, name: `Central Park West ${i + 1}`, text_rank: 1.08, distance_m: 300 }))
+    mockExecute.mockImplementation(async (q: any) => {
+      const text = sqlOf(q)
+      if (text.includes('area_m2 >= 100000')) return [park]
+      return text.includes('ORDER BY centroid <->') && text.includes('LIMIT') ? crowd : []
+    })
+    const results = await searchPlaces({ query: 'central park', lat: 40.7649, lng: -73.98, autocomplete: true, limit: 10 })
+    expect(results[0].id).toBe('way/427818536')
+  })
+
   test('the large-area stage waits for three letters of the last word', async () => {
     // "pa:*" matches ~50K large areas nationally and names none of them yet.
     setLargeAreaIndexReady(true)

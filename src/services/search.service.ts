@@ -974,10 +974,9 @@ export async function searchPlaces(
     if ((transitRouteRows as any[]).length || (transitStopRows as any[]).length) {
       results = reconcileTransitHits(results)
     }
-    // The autocomplete pool is deliberately wider than `limit` — it is trimmed
-    // after the proximity re-rank below, not before, so the re-rank gets to see
-    // the whole candidate set. Every other mode is capped here as before.
-    results = results.slice(0, localAutocomplete ? AUTOCOMPLETE_POOL : limit)
+    // With a location, every candidate goes to the proximity re-rank, which
+    // trims to `limit` after scoring. Capping here would cut by layer order.
+    if (!hasRoute && !hasPointLocation) results = results.slice(0, limit)
 
     // Layer 4: Semantic search
     if (!autocomplete && (semantic || results.length < Math.min(5, limit))) {
